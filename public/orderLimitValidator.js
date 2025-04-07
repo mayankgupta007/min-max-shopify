@@ -635,7 +635,222 @@ async function fetchOrderLimits(productId) {
       errorContainer.style.display = 'none';
     }
   }
+
+  // Add this function to your orderLimitValidator.js file to handle cart UI
+function setupCartPageInterception() {
+  console.log('Setting up cart page interception');
   
+  // Function to find quantity inputs on the cart page
+  function findCartQuantityInputs() {
+    // Different themes use different selectors, so we try multiple
+    const possibleSelectors = [
+      'input[name^="updates"]',                   // Standard cart quantity inputs
+      '.cart__quantity-input',                    // Some themes
+      '.cart-item-quantity-wrapper input',        // Other themes
+      '.quantity-selector__input',                // Yet other themes
+      '[data-quantity-input]',                    // Data attribute based
+      'input[id^="Quantity-"]',                   // Theme specific
+      '.js-qty__input',                           // JS targeted inputs
+      '.cart__qty-input'                          // Another common class
+    ];
+    
+    // Try all these selectors
+    for (const selector of possibleSelectors) {
+      const inputs = document.querySelectorAll(selector);
+      if (inputs.length > 0) {
+        console.log(`Found ${inputs.length} quantity inputs using selector: ${selector}`);
+        return inputs;
+      }
+    }
+    
+    console.log('Could not find cart quantity inputs');
+    return [];
+  }
+  
+  // Function to find quantity buttons (increase/decrease)
+  function findCartQuantityButtons() {
+    const possibleSelectors = [
+      // Increase buttons
+      '[data-quantity-input-up], .js-qty__adjust--plus, .cart__qty-increase, .quantity-up, .plus, [data-action="increase-quantity"]',
+      // Decrease buttons
+      '[data-quantity-input-down], .js-qty__adjust--minus, .cart__qty-decrease, .quantity-down, .minus, [data-action="decrease-quantity"]'
+    ];
+    
+    let buttons = [];
+    for (const selector of possibleSelectors) {
+      const foundButtons = document.querySelectorAll(selector);
+      if (foundButtons.length > 0) {
+        console.log(`Found ${foundButtons.length} quantity buttons using selector: ${selector}`);
+        buttons = [...buttons, ...foundButtons];
+      }
+    }
+    
+    return buttons;
+  }
+  
+  // Cache the product ID we're monitoring
+  const productId = getProductId();
+  if (!productId) {
+    console.log('No product ID to monitor on this page');
+    return;
+  }
+  
+  // Function to intercept direct input changes
+  function interceptQuantityInputs() {
+    const inputs = findCartQuantityInputs();
+    
+    inputs.forEach(input => {
+      // Store original value to restore if invalid
+      input.dataset.lastValidValue = input.value;
+      
+      // Add event listeners
+      ['change', 'input'].forEach(eventType => {
+        input.addEventListener(eventType, function(e) {
+          const newValue = parseInt(this.value, 10);
+          if (isNaN(newValue)) return;
+          
+          // Try to find the cart item this belongs to
+          const cartItem = this.closest('.cart-item, .cart__item, .cart__row, [data-cart-item]');
+          if (!cartItem) return;
+          
+          // Try to extract the product ID from the cart item
+          // This is tricky as different themes store it differently
+          let itemProductId = null;
+          
+          // Try data attribute
+          itemProductId = cartItem.dataset.productId || cartItem.dataset.id;
+          
+          // Try URL in a link
+          if (!itemProductId) {
+            const productLink = cartItem.querySelector('a[href*="/products/"]');
+            if (productLink) {
+              const productUrl = productLink.getAttribute('href');
+              // Extract the handle and query the page
+              // This is approximate as we can't reliably get the product ID from the handle
+              console.log('Found product URL:', productUrl);
+            }
+          }
+          
+          console.log('Cart item product ID:', itemProductId, 'Monitoring product ID:', productId);
+          
+          // If this is our monitored product (or we couldn't determine), validate
+          if (!itemProductId || itemProductId === productId) {
+            console.log(`Validating cart quantity change: ${newValue}, max: ${productLimits?.maxLimit}`);
+            
+            if (productLimits && newValue > productLimits.maxLimit) {
+              console.warn(`Prevented quantity change: ${newValue} exceeds max ${productLimits.maxLimit}`);
+              
+              // Reset the input value to last valid value
+              this.value = this.dataset.lastValidValue;
+              
+              // Show error message
+              displayCartErrorMessage(`Maximum order quantity is ${productLimits.maxLimit}`);
+              
+              // Prevent default and stop propagation
+              e.preventDefault();
+              e.stopPropagation();
+              return false;
+            } else {
+              // Store new valid value
+              this.dataset.lastValidValue = newValue;
+            }
+          }
+        }, true);
+      });
+    });
+  }
+  
+  // Function to intercept quantity buttons
+  function interceptQuantityButtons() {
+    const buttons = findCartQuantityButtons();
+    
+    buttons.forEach(button => {
+      button.addEventListener('click', function(e) {
+        // Try to find the associated input
+        const cartItem = this.closest('.cart-item, .cart__item, .cart__row, [data-cart-item]');
+        if (!cartItem) return;
+        
+        const input = cartItem.querySelector('input[name^="updates"], .cart__quantity-input, input[id^="Quantity-"]');
+        if (!input) return;
+        
+        const currentValue = parseInt(input.value, 10);
+        if (isNaN(currentValue)) return;
+        
+        // Determine if this is increase or decrease
+        const isIncrease = this.classList.contains('js-qty__adjust--plus') || 
+                           this.classList.contains('cart__qty-increase') ||
+                           this.classList.contains('quantity-up') ||
+                           this.classList.contains('plus') ||
+                           this.hasAttribute('data-quantity-input-up') ||
+                           this.getAttribute('data-action') === 'increase-quantity';
+        
+        const newValue = isIncrease ? currentValue + 1 : currentValue - 1;
+        
+        // Try to extract the product ID from the cart item
+        let itemProductId = cartItem.dataset.productId || cartItem.dataset.id;
+        
+        // If this is our monitored product (or we couldn't determine), validate
+        if (!itemProductId || itemProductId === productId) {
+          console.log(`Validating quantity button ${isIncrease ? 'increase' : 'decrease'}: ${newValue}, max: ${productLimits?.maxLimit}`);
+          
+          if (productLimits && isIncrease && newValue > productLimits.maxLimit) {
+            console.warn(`Prevented quantity button: ${newValue} exceeds max ${productLimits.maxLimit}`);
+            
+            // Show error message
+            displayCartErrorMessage(`Maximum order quantity is ${productLimits.maxLimit}`);
+            
+            // Prevent default and stop propagation
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+          }
+        }
+      }, true);
+    });
+  }
+  
+  // Run interception setup
+  setTimeout(() => {
+    interceptQuantityInputs();
+    interceptQuantityButtons();
+    
+    // Set up a mutation observer to catch dynamically added elements
+    const observer = new MutationObserver(mutations => {
+      let shouldRecheck = false;
+      
+      // Check if we need to re-run our interception
+      mutations.forEach(mutation => {
+        if (mutation.type === 'childList' && mutation.addedNodes.length) {
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType === 1 && (
+                node.classList.contains('cart-item') ||
+                node.classList.contains('cart__item') ||
+                node.classList.contains('cart__row') ||
+                node.hasAttribute('data-cart-item')
+            )) {
+              shouldRecheck = true;
+              break;
+            }
+          }
+        }
+      });
+      
+      if (shouldRecheck) {
+        console.log('Cart contents changed, re-running interception');
+        interceptQuantityInputs();
+        interceptQuantityButtons();
+      }
+    });
+    
+    // Start observing the cart container
+    const cartContainer = document.querySelector('.cart, #cart, [data-section-type="cart"], .cart-wrapper');
+    if (cartContainer) {
+      observer.observe(cartContainer, { childList: true, subtree: true });
+    }
+  }, 500); // Small delay to ensure elements are loaded
+}
+  
+
   // Function to initialize validation for add to cart forms
   async function initializeValidation() {
     const productId = getProductId();
@@ -647,6 +862,13 @@ async function fetchOrderLimits(productId) {
     // Check current cart before fetching limits
     await checkCurrentCart();
     
+    // Check if we're on a cart page
+    const onCartPage = window.location.pathname.includes('/cart');
+    if (onCartPage) {
+      console.log('On cart page, setting up additional interception');
+      setupCartPageInterception();
+    }
+
     // Fetch limits for this product
     const limits = await fetchOrderLimits(productId);
     productLimits = limits; // Store globally
