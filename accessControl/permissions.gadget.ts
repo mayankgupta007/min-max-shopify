@@ -111,10 +111,6 @@ export const permissions: GadgetPermissions = {
           },
         },
         shopifyScriptTag: {
-          read: {
-            filter:
-              "accessControl/filters/shopify/shopifyScriptTag.gelly",
-          },
           actions: {
             create: true,
             delete: true,
@@ -252,9 +248,6 @@ export const permissions: GadgetPermissions = {
             delete: true,
             update: true,
           },
-        },
-        shopifyScriptTag: {
-          read: true,
         },
         shopifyShop: {
           read: true,

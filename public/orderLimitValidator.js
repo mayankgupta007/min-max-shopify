@@ -349,6 +349,82 @@
     };
   }
   
+
+  // This is a more comprehensive fix for orderLimitValidator.js
+
+  // Save the original fetch at the beginning of the file
+const originalFetch = window.fetch;
+
+// Modify the fetch interception specifically for cart/add requests
+// Store the product limits in a globally accessible variable
+let productLimits = null;
+let currentCartQuantity = 0;
+
+// Function to check the current cart
+async function checkCurrentCart() {
+  try {
+    console.log("Checking current cart contents...");
+    const response = await originalFetch('/cart.js', { 
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+    
+    if (response.ok) {
+      const cart = await response.json();
+      console.log("Current cart:", cart);
+      
+      if (cart && cart.items) {
+        // Get the product ID we're tracking
+        const productId = getProductId();
+        if (!productId) return 0;
+        
+        // Find any matching items in the cart
+        let quantity = 0;
+        for (const item of cart.items) {
+          const itemProductId = item.product_id;
+          if (itemProductId == productId) {
+            quantity += item.quantity;
+            console.log(`Found ${item.quantity} of product ${productId} in cart`);
+          }
+        }
+        
+        currentCartQuantity = quantity;
+        console.log(`Total quantity of product ${productId} in cart: ${currentCartQuantity}`);
+        return quantity;
+      }
+    }
+    return 0;
+  } catch (error) {
+    console.error("Error checking cart:", error);
+    return 0;
+  }
+}
+
+// Function to validate total quantity (existing + new)
+function validateTotalQuantity(newQuantity, limits) {
+  if (!limits) return { valid: true };
+  
+  const totalQuantity = currentCartQuantity + parseInt(newQuantity, 10);
+  console.log(`Validating total quantity: ${currentCartQuantity} (in cart) + ${newQuantity} (adding) = ${totalQuantity}, max: ${limits.maxLimit}`);
+  
+  if (limits.minLimit && totalQuantity < limits.minLimit) {
+    return {
+      valid: false,
+      message: `Minimum order quantity is ${limits.minLimit}`
+    };
+  }
+  
+  if (limits.maxLimit && totalQuantity > limits.maxLimit) {
+    return {
+      valid: false,
+      message: `Maximum order quantity is ${limits.maxLimit}. You already have ${currentCartQuantity} in your cart.`
+    };
+  }
+  
+  return { valid: true };
+}
+
+
   /**
    * Get order limits for a product
    * Tries multiple strategies to get limits, with fallbacks
@@ -568,8 +644,12 @@ async function fetchOrderLimits(productId) {
       return;
     }
     
+    // Check current cart before fetching limits
+    await checkCurrentCart();
+    
     // Fetch limits for this product
     const limits = await fetchOrderLimits(productId);
+    productLimits = limits; // Store globally
     
     if (!limits) {
       console.log('No limits could be retrieved for this product');
@@ -614,21 +694,78 @@ async function fetchOrderLimits(productId) {
       }, true);
     });
     
-    // Intercept fetch/XHR requests for AJAX cart additions
-// Updated version of the orderLimitValidator.js script to intercept cart/change requests
 
-// This change should be made in the fetch interception part of your file
-// Replace the existing fetch interception code with this updated version:
 
-// Intercept fetch/XHR requests for AJAX cart additions and changes
-const originalFetch = window.fetch;
-window.fetch = function(url, options) {
+    // Add this function near your other UI functions for displaying error messages
+function displayCartErrorMessage(message) {
+  // Try to find an existing cart error message container
+  let errorContainer = document.querySelector('.order-limit-cart-error');
+  
+  if (!errorContainer) {
+    // Create a new error container for cart pages
+    errorContainer = document.createElement('div');
+    errorContainer.className = 'order-limit-cart-error';
+    errorContainer.style.color = 'red';
+    errorContainer.style.marginTop = '10px';
+    errorContainer.style.fontWeight = 'bold';
+    errorContainer.style.padding = '10px';
+    errorContainer.style.border = '1px solid red';
+    errorContainer.style.borderRadius = '4px';
+    errorContainer.style.backgroundColor = '#fff1f0';
+    errorContainer.style.position = 'fixed';
+    errorContainer.style.top = '20px';
+    errorContainer.style.right = '20px';
+    errorContainer.style.zIndex = '9999';
+    errorContainer.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
+    
+    // Add a close button
+    const closeButton = document.createElement('button');
+    closeButton.innerHTML = '&times;';
+    closeButton.style.background = 'none';
+    closeButton.style.border = 'none';
+    closeButton.style.float = 'right';
+    closeButton.style.fontSize = '20px';
+    closeButton.style.cursor = 'pointer';
+    closeButton.onclick = function() { errorContainer.style.display = 'none'; };
+    
+    errorContainer.appendChild(closeButton);
+    document.body.appendChild(errorContainer);
+  }
+  
+  // Clear any existing content (except close button)
+  while(errorContainer.childNodes.length > 1) {
+    errorContainer.removeChild(errorContainer.lastChild);
+  }
+  
+  // Add the error message
+  const messageElement = document.createElement('div');
+  messageElement.textContent = message;
+  errorContainer.appendChild(messageElement);
+  
+  // Show the container
+  errorContainer.style.display = 'block';
+  
+  // Auto-hide after 5 seconds
+  setTimeout(() => {
+    errorContainer.style.display = 'none';
+  }, 5000);
+}
+
+// Replace the fetch interception for cart/add
+// const originalFetch = window.fetch;
+window.fetch = async function(url, options) {
   // Check if this is a cart/add request
   if (typeof url === 'string' && url.includes('/cart/add')) {
     console.log('Intercepted fetch cart/add request');
     
     try {
-      // Parse form data if it exists
+      // Get the current product ID
+      const productId = getProductId();
+      
+      // Check current cart contents
+      await checkCurrentCart();
+      
+      // Parse form data to get quantity
       if (options && options.body) {
         let quantity = 1;
         
@@ -641,18 +778,26 @@ window.fetch = function(url, options) {
           quantity = options.body.quantity || 1;
         }
         
-        const result = validateQuantity(quantity, limits);
-        if (!result.valid) {
-          showErrorMessage(result.message);
-          return Promise.reject(new Error(result.message));
+        console.log(`Adding quantity: ${quantity}, current in cart: ${currentCartQuantity}, max: ${productLimits?.maxLimit}`);
+        
+        // Validate the total quantity with what's already in cart
+        if (productLimits) {
+          const result = validateTotalQuantity(quantity, productLimits);
+          if (!result.valid) {
+            showErrorMessage(result.message);
+            console.error("Cart add prevented:", result.message);
+            return Promise.reject(new Error(result.message));
+          }
+        } else {
+          console.warn("No product limits available to validate against");
         }
       }
     } catch (error) {
-      console.error('Error parsing fetch request:', error);
+      console.error('Error in cart/add interception:', error);
     }
   }
   
-  // NEW CODE: Check if this is a cart/change request (for quantity adjustments)
+  // Check if this is a cart/change request (for quantity adjustments)
   else if (typeof url === 'string' && url.includes('/cart/change') && options && options.body) {
     console.log('Intercepted fetch cart/change request');
     
@@ -687,7 +832,10 @@ window.fetch = function(url, options) {
         
         const result = validateQuantity(quantity, limits);
         if (!result.valid) {
-          showErrorMessage(result.message);
+          // Display error message on the cart page
+          displayCartErrorMessage(result.message);
+          
+          // Return a rejected promise to prevent the request from going through
           return Promise.reject(new Error(result.message));
         }
       }
@@ -700,45 +848,80 @@ window.fetch = function(url, options) {
 };
 
     
-    const originalXHROpen = XMLHttpRequest.prototype.open;
-    const originalXHRSend = XMLHttpRequest.prototype.send;
+const originalXHROpen = XMLHttpRequest.prototype.open;
+const originalXHRSend = XMLHttpRequest.prototype.send;
+
+XMLHttpRequest.prototype.open = function(method, url) {
+  this._orderLimitUrl = url;
+  originalXHROpen.apply(this, arguments);
+};
+
+XMLHttpRequest.prototype.send = function(body) {
+  // Check if this is a cart/add request
+  if (typeof this._orderLimitUrl === 'string' && this._orderLimitUrl.includes('/cart/add')) {
+    console.log('Intercepted XHR cart/add request');
     
-    XMLHttpRequest.prototype.open = function(method, url) {
-      this._orderLimitUrl = url;
-      originalXHROpen.apply(this, arguments);
-    };
-    
-    XMLHttpRequest.prototype.send = function(body) {
-      // Check if this is a cart/add request
-      if (typeof this._orderLimitUrl === 'string' && this._orderLimitUrl.includes('/cart/add')) {
-        console.log('Intercepted XHR cart/add request');
+    try {
+      // Parse form data if it exists
+      if (body) {
+        let quantity = 1;
         
+        if (body instanceof FormData) {
+          quantity = body.get('quantity') || 1;
+        } else if (typeof body === 'string') {
+          const params = new URLSearchParams(body);
+          quantity = params.get('quantity') || 1;
+        }
+        
+        const result = validateQuantity(parseInt(quantity, 10), limits);
+        if (!result.valid) {
+          showErrorMessage(result.message);
+          this.abort();
+          return;
+        }
+      }
+    } catch (error) {
+      console.error('Error parsing XHR request:', error);
+    }
+  }
+  // Handle cart/change requests
+  else if (typeof this._orderLimitUrl === 'string' && this._orderLimitUrl.includes('/cart/change')) {
+    console.log('Intercepted XHR cart/change request');
+    
+    try {
+      let quantity = null;
+      
+      if (body instanceof FormData) {
+        quantity = body.get('quantity') ? parseInt(body.get('quantity'), 10) : null;
+      } else if (typeof body === 'string') {
         try {
-          // Parse form data if it exists
-          if (body) {
-            let quantity = 1;
-            
-            if (body instanceof FormData) {
-              quantity = body.get('quantity') || 1;
-            } else if (typeof body === 'string') {
-              const params = new URLSearchParams(body);
-              quantity = params.get('quantity') || 1;
-            }
-            
-            const result = validateQuantity(quantity, limits);
-            if (!result.valid) {
-              showErrorMessage(result.message);
-              this.abort();
-              return;
-            }
-          }
-        } catch (error) {
-          console.error('Error parsing XHR request:', error);
+          // Try to parse as JSON first
+          const parsedBody = JSON.parse(body);
+          quantity = parsedBody.quantity ? parseInt(parsedBody.quantity, 10) : null;
+        } catch (e) {
+          // If not JSON, try as URL params
+          const params = new URLSearchParams(body);
+          quantity = params.get('quantity') ? parseInt(params.get('quantity'), 10) : null;
         }
       }
       
-      originalXHRSend.apply(this, arguments);
-    };
+      if (quantity !== null) {
+        console.log(`Validating cart/change XHR quantity: ${quantity}, max: ${limits.maxLimit}`);
+        
+        const result = validateQuantity(quantity, limits);
+        if (!result.valid) {
+          displayCartErrorMessage(result.message);
+          this.abort();
+          return;
+        }
+      }
+    } catch (error) {
+      console.error('Error parsing XHR cart/change request:', error);
+    }
+  }
+  
+  originalXHRSend.apply(this, arguments);
+};
     
     console.log('Order limit validation initialized for product', productId);
   }
