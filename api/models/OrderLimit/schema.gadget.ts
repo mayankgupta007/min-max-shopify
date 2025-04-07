@@ -22,5 +22,6 @@ export const schema: GadgetModel = {
       validations: { required: true, unique: true },
       storageKey: "TybEu3mAIE-o",
     },
+    productName: { type: "string", storageKey: "9fp3tnyB6xo5" },
   },
 };

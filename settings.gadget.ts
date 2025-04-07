@@ -15,6 +15,7 @@ export const settings: GadgetSettings = {
           "shopifyProductOption",
           "shopifyProductVariant",
           "shopifyProductVariantMedia",
+          "shopifyScriptTag",
         ],
         type: "partner",
         scopes: [
@@ -23,6 +24,8 @@ export const settings: GadgetSettings = {
           "read_product_listings",
           "unauthenticated_read_product_listings",
           "unauthenticated_read_product_pickup_locations",
+          "read_script_tags",
+          "write_script_tags",
         ],
       },
       openai: true,

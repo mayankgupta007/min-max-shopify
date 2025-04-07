@@ -110,6 +110,17 @@ export const permissions: GadgetPermissions = {
             update: true,
           },
         },
+        shopifyScriptTag: {
+          read: {
+            filter:
+              "accessControl/filters/shopify/shopifyScriptTag.gelly",
+          },
+          actions: {
+            create: true,
+            delete: true,
+            update: true,
+          },
+        },
         shopifyShop: {
           read: {
             filter: "accessControl/filters/shopify/shopifyShop.gelly",
@@ -137,10 +148,11 @@ export const permissions: GadgetPermissions = {
         },
       },
       actions: {
-        checkAppProxyConfiguration: true,
+        ensureScriptTagRegistered: true,
+        manualRegisterScriptTag: true,
         registerScriptTag: true,
         scheduledShopifySync: true,
-        verifyScriptTagRegistration: true,
+        testOrderLimitSetup: true,
       },
     },
     unauthenticated: {
@@ -241,6 +253,9 @@ export const permissions: GadgetPermissions = {
             update: true,
           },
         },
+        shopifyScriptTag: {
+          read: true,
+        },
         shopifyShop: {
           read: true,
           actions: {
@@ -269,10 +284,11 @@ export const permissions: GadgetPermissions = {
         },
       },
       actions: {
-        checkAppProxyConfiguration: true,
+        ensureScriptTagRegistered: true,
+        manualRegisterScriptTag: true,
         registerScriptTag: true,
         scheduledShopifySync: true,
-        verifyScriptTagRegistration: true,
+        testOrderLimitSetup: true,
       },
     },
   },

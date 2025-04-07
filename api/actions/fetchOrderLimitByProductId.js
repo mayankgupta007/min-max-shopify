@@ -1,47 +1,48 @@
-/** @type { ActionRun } */
+// api/actions/fetchOrderLimitByProductId.js
+
 export const run = async ({ params, logger, api, connections }) => {
   try {
-    logger.info(`Searching for OrderLimit with productId: ${params.productId}`);
+    // Ensure productId is a number
+    const productId = typeof params.productId === 'string' 
+      ? parseInt(params.productId, 10) 
+      : params.productId;
+    
+    if (isNaN(productId)) {
+      logger.warn(`Invalid product ID passed to fetchOrderLimitByProductId: ${params.productId}`);
+      throw new Error(`Invalid product ID: ${params.productId}`);
+    }
+    
+    logger.info(`Searching for OrderLimit with productId: ${productId}`);
     
     // Use the API to search for an OrderLimit with the matching productId
-    // Since productId is stored as a number in the database, we use a numeric comparison filter
     const orderLimit = await api.OrderLimit.maybeFindFirst({
       filter: {
-        productId: { equals: params.productId }
+        productId: { equals: productId }
       }
     });
     
     if (orderLimit) {
       logger.info(`Found OrderLimit record with id: ${orderLimit.id}`);
+      return {
+        minLimit: orderLimit.minLimit,
+        maxLimit: orderLimit.maxLimit,
+        productId: productId,
+        productName: orderLimit.productName || `Product ${productId}`,
+        message: "Limits found"
+      };
     } else {
-      logger.info(`No OrderLimit found for productId: ${params.productId}`);
+      logger.info(`No OrderLimit found for productId: ${productId}`);
+      // Return a default object with null values
+      return {
+        minLimit: null,
+        maxLimit: null,
+        productId: productId,
+        productName: null,
+        message: "No limits found for this product"
+      };
     }
-    
-    // Return the found record or null if not found
-    return orderLimit;
   } catch (error) {
     logger.error(`Error fetching OrderLimit by productId: ${error.message}`, { error });
     throw error;
-  }
-};
-
-/**
- * Define the parameter schema for this action
- * 
- * The productId parameter is defined as a number because the OrderLimit model 
- * stores productId as a numeric field. This ensures proper type handling and
- * numeric comparison in the database query.
- */
-export const params = {
-  productId: { type: "number" }
-};
-
-/**
- * Configure the action options
- */
-export const options = {
-  returns: true,
-  triggers: {
-    api: true
   }
 };

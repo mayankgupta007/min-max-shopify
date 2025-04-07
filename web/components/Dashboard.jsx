@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { Page, Layout, Card, Text, Button } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { ResourcePicker } from "@shopify/app-bridge/actions";
-import OrderLimits from "./OrderLimits"; // This import is correct
+import OrderLimits from "./OrderLimits";
+import LimitManager from "./LimitManager";  // This should work with the simplified version
 
 export default function Dashboard() {
   const app = useAppBridge();
@@ -48,9 +49,15 @@ export default function Dashboard() {
   return (
     <Page title="Dashboard">
       <Layout>
+        {/* First show the LimitManager component */}
+        <Layout.Section>
+          <LimitManager />
+        </Layout.Section>
+        
+        {/* Then show the product picker and order limits sections */}
         <Layout.Section>
           <Card sectioned>
-            <Text variant="headingMd">Manage Order Limits</Text>
+            <Text variant="headingMd">Add New Limit</Text>
             <Button onClick={openProductPicker}>
               {selectedProduct ? "Change Product" : "Select Product"}
             </Button>
@@ -66,11 +73,8 @@ export default function Dashboard() {
               <Text variant="headingMd">Selected Product</Text>
               <Text variant="bodyMd">{selectedProduct.title}</Text>
               {selectedProduct.id && (
-                <Text variant="bodyMd">
-                  Product ID: {selectedProduct.id}
-                </Text>
+                <Text variant="bodyMd">Product ID: {selectedProduct.id}</Text>
               )}
-              {/* Render OrderLimits component */}
               <OrderLimits selectedProduct={selectedProduct} />
             </Card>
           )}

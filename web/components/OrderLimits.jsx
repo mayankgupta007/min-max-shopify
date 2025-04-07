@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Card, TextField, Button, DataTable, Banner, Spinner, Box, InlineStack, Text } from "@shopify/polaris";
+import { Card, TextField, Button, DataTable, Banner, Spinner, Box, Text } from "@shopify/polaris";
 import { fetchOrderLimitById, saveOrderLimit, extractNumericId } from "../utils/orderLimitUtils";
 
 const OrderLimits = ({ selectedProduct }) => {
@@ -12,28 +12,35 @@ const OrderLimits = ({ selectedProduct }) => {
   const [productIdDisplay, setProductIdDisplay] = useState("");
 
   useEffect(() => {
-    if (selectedProduct) {
-      handleFetchOrderLimit();
-      
-      // Extract and display the numeric product ID for reference
+    // Reset state when switching products
+    setLimits([]);
+    setMinLimit(0);
+    setMaxLimit(0);
+    
+    // Only attempt to fetch if we have a valid product
+    if (selectedProduct && selectedProduct.id) {
       try {
         const numericId = extractNumericId(selectedProduct.id);
         setProductIdDisplay(numericId.toString());
+        // Only try to fetch after we've confirmed the ID is valid
+        handleFetchOrderLimit(numericId);
       } catch (error) {
         console.error("Error extracting numeric product ID:", error);
         setProductIdDisplay("Invalid ID");
+        setStatusMessage({
+          content: `Invalid product ID: ${error.message}`,
+          status: "error"
+        });
       }
     } else {
       // Reset state when no product is selected
-      setLimits([]);
-      setMinLimit(0);
-      setMaxLimit(0);
       setProductIdDisplay("");
+      console.log("No product selected or product ID is missing");
     }
   }, [selectedProduct]);
 
   const handleSaveLimits = async () => {
-    if (!selectedProduct) {
+    if (!selectedProduct || !selectedProduct.id) {
       setStatusMessage({
         content: "No product selected. Please select a product first.",
         status: "error"
@@ -85,8 +92,10 @@ const OrderLimits = ({ selectedProduct }) => {
         productId: numericProductId,
         minLimit: minLimitNum,
         maxLimit: maxLimitNum,
+        productName: selectedProduct.title || `Product ${numericProductId}`, // Fallback for missing title
       };
       
+      console.log("Saving order limit with data:", data);
       const result = await saveOrderLimit(data);
       
       setStatusMessage({
@@ -94,8 +103,8 @@ const OrderLimits = ({ selectedProduct }) => {
         status: "success"
       });
       
-      // Refresh the displayed data
-      await handleFetchOrderLimit();
+      // Refresh the displayed data with the known numeric ID
+      await handleFetchOrderLimit(numericProductId);
     } catch (error) {
       setStatusMessage({
         content: `Error saving order limits: ${error.message || "Unknown error"}`,
@@ -107,51 +116,125 @@ const OrderLimits = ({ selectedProduct }) => {
     }
   };
 
-  const handleFetchOrderLimit = async () => {
-    if (!selectedProduct) return;
-    
-    setFetchLoading(true);
-    setStatusMessage({ content: "", status: "" });
+// In OrderLimits.jsx - update the handleFetchOrderLimit function:
 
-    try {
-      let numericProductId;
+const handleFetchOrderLimit = async (providedNumericId = null) => {
+  // First check if we have a selected product
+  if (!selectedProduct) {
+    console.log("No selectedProduct object, skipping fetch");
+    return;
+  }
+  
+  // Debug what's in the selectedProduct
+  console.log("selectedProduct in handleFetchOrderLimit:", 
+    JSON.stringify({
+      id: selectedProduct.id,
+      title: selectedProduct.title,
+      type: typeof selectedProduct.id
+    })
+  );
+  
+  // Check for null/undefined ID or empty string
+  if (!selectedProduct.id || selectedProduct.id === "") {
+    console.log("selectedProduct has null/undefined/empty ID, skipping fetch");
+    return;
+  }
+  
+  setFetchLoading(true);
+  setStatusMessage({ content: "", status: "" });
+
+  try {
+    let numericProductId = providedNumericId;
+    
+    // If numeric ID wasn't provided, extract it
+    if (!numericProductId) {
       try {
+        console.log(`Attempting to extract ID from: ${selectedProduct.id}`);
         numericProductId = extractNumericId(selectedProduct.id);
+        console.log(`Successfully extracted numericProductId: ${numericProductId}`);
       } catch (error) {
-        throw new Error(`Invalid product ID: ${error.message}`);
+        console.error("Failed to extract product ID:", error);
+        setStatusMessage({
+          content: `Cannot parse product ID: ${error.message}`,
+          status: "error"
+        });
+        setFetchLoading(false);
+        return; // Exit early
       }
-      
-      if (!numericProductId) {
-        throw new Error("Could not determine numeric product ID");
-      }
-      
-      const orderLimit = await fetchOrderLimitById(numericProductId);
-      
-      if (orderLimit) {
-        setLimits([orderLimit]);
-        setMinLimit(orderLimit.minLimit || 0);
-        setMaxLimit(orderLimit.maxLimit || 0);
-      } else {
-        // No limits found, reset to defaults
-        setLimits([]);
-        setMinLimit(0);
-        setMaxLimit(0);
-      }
-    } catch (error) {
+    }
+    
+    if (!numericProductId) {
+      console.error("numericProductId is falsy after extraction attempts");
       setStatusMessage({
-        content: `Error fetching order limit: ${error.message || "Unknown error"}`,
+        content: "Could not determine product ID",
         status: "error"
       });
-      console.error("Error fetching order limit:", error);
-      
-      // Reset state on error
-      setLimits([]);
-      setMinLimit(0);
-      setMaxLimit(0);
-    } finally {
       setFetchLoading(false);
+      return; // Exit early
     }
-  };
+    
+    console.log("About to call fetchOrderLimitById with:", numericProductId);
+    // Add a try/catch specifically around the fetchOrderLimitById call
+    try {
+      const orderLimit = await fetchOrderLimitById(numericProductId);
+      handleOrderLimitResponse(orderLimit);
+    } catch (error) {
+      console.error("Error from fetchOrderLimitById:", error);
+      setStatusMessage({
+        content: `Error fetching limit: ${error.message}`,
+        status: "error"
+      });
+    }
+  } catch (error) {
+    // This catch block handles other errors in the function
+    console.error("General error in handleFetchOrderLimit:", error);
+    
+    // Don't show error message for "no limits found" since that's expected
+    if (error.message && error.message.includes("No limits found")) {
+      console.log("No limits found for this product (expected)");
+      setLimits([]);
+    } else {
+      setStatusMessage({
+        content: `Error: ${error.message || "Unknown error"}`,
+        status: "error"
+      });
+    }
+  } finally {
+    setFetchLoading(false);
+  }
+};
+
+// Helper function to handle the response from fetchOrderLimitById
+const handleOrderLimitResponse = (orderLimit) => {
+  // If orderLimit is null, it means the fetch completed but no limit exists
+  if (orderLimit === null) {
+    console.log("No order limit found for this product");
+    setLimits([]);
+    // Keep the form fields at their default values
+    return;
+  }
+  
+  // Check if it's a real order limit or our default "not found" object
+  if (orderLimit && orderLimit.id) {
+    // This is a real order limit record
+    setLimits([orderLimit]);
+    setMinLimit(orderLimit.minLimit || 0);
+    setMaxLimit(orderLimit.maxLimit || 0);
+  } else if (orderLimit && orderLimit.message === "No limits found for this product") {
+    // This is our default "not found" response
+    console.log("No limits found message received");
+    setLimits([]);
+    // Keep default form values
+  } else {
+    // Any other response
+    setLimits(orderLimit ? [orderLimit] : []);
+    if (orderLimit) {
+      setMinLimit(orderLimit.minLimit || 0);
+      setMaxLimit(orderLimit.maxLimit || 0);
+    }
+  }
+};
+
 
   return (
     <Card title="Set Order Limits">
@@ -218,9 +301,9 @@ const OrderLimits = ({ selectedProduct }) => {
                     columnContentTypes={['text', 'numeric', 'numeric']}
                     headings={['Product ID', 'Min Limit', 'Max Limit']}
                     rows={limits.map((limit) => [
-                      limit.productId.toString(),
-                      limit.minLimit,
-                      limit.maxLimit
+                      limit.productId !== undefined ? String(limit.productId) : 'N/A',
+                      limit.minLimit !== undefined ? limit.minLimit : 'N/A',
+                      limit.maxLimit !== undefined ? limit.maxLimit : 'N/A'
                     ])}
                   />
                 </Box>

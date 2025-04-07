@@ -61,6 +61,7 @@ export const schema: GadgetModel = {
       "province",
       "provinceCode",
       "requiresExtraPaymentsAgreement",
+      "scriptTags",
       "setupRequired",
       "shopOwner",
       "shopifyCreatedAt",

@@ -2,9 +2,9 @@
 # When you add a production config, values will be auto-populated here
 # Read more at https://docs.gadget.dev/guides/plugins/shopify/shopify-app-toml
 
-scopes = "read_products,write_products,read_product_listings,unauthenticated_read_product_listings,unauthenticated_read_product_pickup_locations"
+scopes = "read_products,write_products,read_product_listings,unauthenticated_read_product_listings,unauthenticated_read_product_pickup_locations,read_script_tags,write_script_tags"
 
 [[shopify.app_proxy]]
 subpath = "order-limit-app"
-prefix = ""
-url = "${HOST}/app-proxy"
+prefix = "apps"
+url = "https://low--development.gadget.app/api/public/app-proxy"
