@@ -1,25 +1,34 @@
+const DEBUG_MODE = false;
+
+// Replace all debugLog calls with this function
+function debugLog(...args) {
+  if (DEBUG_MODE) {
+    console.log(...args);
+  }
+}
+
 // Add this at the beginning of your orderLimitValidator.js file
 (function diagnoseScriptLoading() {
-  console.log("%c ORDER LIMIT VALIDATOR - DIAGNOSTIC INFO ", "background: #ff6b6b; color: white; padding: 4px;");
-  console.log("Script URL:", document.currentScript?.src || "Unknown");
-  console.log("Page URL:", window.location.href);
-  console.log("Shop domain:", window.Shopify?.shop || document.querySelector('meta[name="shopify-shop-id"]')?.content || "Unknown");
-  console.log("App proxy path:", "/apps/order-limit-app");
+  debugLog("%c ORDER LIMIT VALIDATOR - DIAGNOSTIC INFO ", "background: #ff6b6b; color: white; padding: 4px;");
+  debugLog("Script URL:", document.currentScript?.src || "Unknown");
+  debugLog("Page URL:", window.location.href);
+  debugLog("Shop domain:", window.Shopify?.shop || document.querySelector('meta[name="shopify-shop-id"]')?.content || "Unknown");
+  debugLog("App proxy path:", "/apps/order-limit-app");
 
   // Check if we're on a product page
   const onProductPage = window.location.pathname.includes('/products/');
-  console.log("On product page:", onProductPage);
+  debugLog("On product page:", onProductPage);
 
   if (onProductPage) {
     // Log all potential product ID sources
-    console.log("Meta tags:", document.querySelectorAll('meta[property^="og:product"]').length);
-    console.log("Form for cart/add:", document.querySelector('form[action*="/cart/add"]') ? "Found" : "Not found");
+    debugLog("Meta tags:", document.querySelectorAll('meta[property^="og:product"]').length);
+    debugLog("Form for cart/add:", document.querySelector('form[action*="/cart/add"]') ? "Found" : "Not found");
   }
 })();
 
 // This should be saved in the web/public directory but accessed at the root URL
 (function() {
-  console.log('==== ORDER LIMIT VALIDATOR LOADED ====');
+  debugLog('==== ORDER LIMIT VALIDATOR LOADED ====');
 
   // Configuration
   const APP_PROXY_PATH = '/apps/order-limit-app';
@@ -32,7 +41,7 @@
     const productMetaTag = document.querySelector('meta[property="og:product:id"], meta[name="product-id"]');
     attempts.metaTag = productMetaTag ? productMetaTag.content : 'Not found';
     if (productMetaTag) {
-      console.log('✅ Found product ID from meta tag:', productMetaTag.content);
+      debugLog('✅ Found product ID from meta tag:', productMetaTag.content);
       return productMetaTag.content;
     }
 
@@ -43,7 +52,7 @@
       try {
         const data = JSON.parse(jsonLdScript.textContent);
         if (data && data['@type'] === 'Product' && data.productID) {
-          console.log('✅ Found product ID from JSON-LD:', data.productID);
+          debugLog('✅ Found product ID from JSON-LD:', data.productID);
           attempts.jsonLd = data.productID;
           return data.productID;
         }
@@ -57,7 +66,7 @@
     attempts.urlPath = pathMatch ? pathMatch[1] : 'No match';
     if (pathMatch) {
       // This is a product handle, not ID
-      console.log('🔍 Found product handle from URL:', pathMatch[1]);
+      debugLog('🔍 Found product handle from URL:', pathMatch[1]);
 
       // Method 4: Try to find product ID from JSON data in the page
       const jsonElements = document.querySelectorAll('script[type="application/json"]');
@@ -66,7 +75,7 @@
         try {
           const data = JSON.parse(element.textContent);
           if (data && data.product && data.product.id) {
-            console.log('✅ Found product ID from JSON data:', data.product.id);
+            debugLog('✅ Found product ID from JSON data:', data.product.id);
             attempts.jsonInPage = data.product.id;
             return String(data.product.id).replace(/\D/g, ''); // Extract numeric ID
           }
@@ -84,12 +93,12 @@
       const idInput = formElement.querySelector('input[name="id"]');
       attempts.idInput = idInput ? idInput.value : 'Not found';
       if (idInput && idInput.value) {
-        console.log('🔍 Found variant ID from form:', idInput.value);
+        debugLog('🔍 Found variant ID from form:', idInput.value);
         // This is a variant ID, check if we can find product ID
         const productId = idInput.getAttribute('data-product-id');
         attempts.dataProductId = productId || 'Not found';
         if (productId) {
-          console.log('✅ Found product ID from form attribute:', productId);
+          debugLog('✅ Found product ID from form attribute:', productId);
           return productId;
         }
 
@@ -100,7 +109,7 @@
           const pid = productInput.value || productInput.getAttribute('data-product-id');
           attempts.productInputValue = pid || 'No value';
           if (pid) {
-            console.log('✅ Found product ID from product input:', pid);
+            debugLog('✅ Found product ID from product input:', pid);
             return pid;
           }
         }
@@ -115,14 +124,14 @@
         const pid = container.getAttribute('data-product-id') ||
           container.getAttribute('data-product');
         if (pid && /^\d+$/.test(pid)) {
-          console.log('✅ Found product ID from container attribute:', pid);
+          debugLog('✅ Found product ID from container attribute:', pid);
           attempts.domSearchResult = pid;
           return pid;
         }
       }
     }
 
-    console.log('❌ Could not find product ID. Attempted methods:', attempts);
+    debugLog('❌ Could not find product ID. Attempted methods:', attempts);
     return null;
   }
 
@@ -131,14 +140,14 @@
   window.fetch = function(...args) {
     const [url, options] = args;
     if (typeof url === 'string') {
-      console.log('🔍 FETCH REQUEST:', {
+      debugLog('🔍 FETCH REQUEST:', {
         url,
         options
       });
 
       // Log app proxy requests specifically
       if (url.includes('/apps/order-limit-app')) {
-        console.log('📣 APP PROXY REQUEST DETECTED:', url);
+        debugLog('📣 APP PROXY REQUEST DETECTED:', url);
       }
     }
 
@@ -146,7 +155,7 @@
     return originalFetchForDebug.apply(this, args)
       .then(response => {
         if (typeof url === 'string' && url.includes('/apps/order-limit-app')) {
-          console.log(`📣 APP PROXY RESPONSE (${response.status}):`, response);
+          debugLog(`📣 APP PROXY RESPONSE (${response.status}):`, response);
 
           // Check content type before attempting to parse
           const contentType = response.headers.get('content-type');
@@ -155,23 +164,23 @@
           if (contentType && contentType.includes('application/json')) {
             // If it's JSON, parse and log it
             response.clone().json()
-              .then(data => console.log('📣 APP PROXY RESPONSE DATA:', data))
-              .catch(err => console.log('📣 Could not parse response as JSON:', err));
+              .then(data => debugLog('📣 APP PROXY RESPONSE DATA:', data))
+              .catch(err => debugLog('📣 Could not parse response as JSON:', err));
           } else {
             // If it's not JSON, log the first part as text
             response.clone().text()
               .then(text => {
-                console.log(`📣 Non-JSON response (${contentType})`);
-                console.log(`📣 Response text preview: ${text.substring(0, 150)}...`);
+                debugLog(`📣 Non-JSON response (${contentType})`);
+                debugLog(`📣 Response text preview: ${text.substring(0, 150)}...`);
               })
-              .catch(err => console.log('📣 Could not read response text:', err));
+              .catch(err => debugLog('📣 Could not read response text:', err));
           }
         }
         return response;
       })
       .catch(error => {
         if (typeof url === 'string' && url.includes('/apps/order-limit-app')) {
-          console.log('📣 APP PROXY REQUEST ERROR:', error);
+          debugLog('📣 APP PROXY REQUEST ERROR:', error);
         }
         throw error;
       });
@@ -185,7 +194,7 @@
    * @returns {Object|null} - Extracted order limit data or null if not found
    */
   function extractOrderLimitsFromHtml(htmlContent, productId) {
-    console.log('🔍 Attempting to extract order limits from HTML...');
+    debugLog('🔍 Attempting to extract order limits from HTML...');
 
     // Make a fake limits object if we can't find real ones in the HTML
     // This allows testing the validation functionality even if the API is returning HTML
@@ -208,7 +217,7 @@
         try {
           const extractedJson = jsonMatch[1].replace(/'/g, '"');
           const data = JSON.parse(extractedJson);
-          console.log('✅ Successfully extracted JSON data from HTML:', data);
+          debugLog('✅ Successfully extracted JSON data from HTML:', data);
           return data;
         } catch (jsonError) {
           console.warn('⚠️ Found potential JSON in HTML but failed to parse:', jsonError);
@@ -217,7 +226,7 @@
 
       // Try to find a table with limit information
       if (htmlContent.includes('<table') && htmlContent.includes('min') && htmlContent.includes('max')) {
-        console.log('🔍 Found table in HTML that might contain limit information');
+        debugLog('🔍 Found table in HTML that might contain limit information');
         // This would need more sophisticated parsing to extract data from a table
         // For simplicity, using default limits
       }
@@ -243,11 +252,11 @@
           result.maxLimit = parseInt(maxMatch[1], 10);
         }
 
-        console.log('✅ Extracted limits from text patterns:', result);
+        debugLog('✅ Extracted limits from text patterns:', result);
         return result;
       }
 
-      console.log('⚠️ Could not find limit information in HTML, using defaults');
+      debugLog('⚠️ Could not find limit information in HTML, using defaults');
       return defaultLimits;
     } catch (error) {
       console.error('❌ Error extracting data from HTML:', error);
@@ -262,10 +271,10 @@
    */
   async function directApiCall(productId) {
     try {
-      console.log('\ud83d\udd04 Attempting direct API call as fallback');
+      debugLog('\ud83d\udd04 Attempting direct API call as fallback');
       const directApiUrl = `/apps/order-limit-app/product-limits/${productId}`;
 
-      console.log(`\ud83d\udd0d Direct API URL: ${directApiUrl}`);
+      debugLog(`\ud83d\udd0d Direct API URL: ${directApiUrl}`);
 
       const response = await fetch(directApiUrl, {
         method: 'GET',
@@ -282,7 +291,7 @@
         if (contentType && contentType.includes('application/json')) {
           try {
             const data = await response.json();
-            console.log('✅ Direct API call successful:', data);
+            debugLog('✅ Direct API call successful:', data);
             return data;
           } catch (jsonError) {
             console.error('❌ Direct API returned invalid JSON:', jsonError);
@@ -291,7 +300,7 @@
         // Handle HTML responses with proper HTML parsing
         else {
           const htmlText = await response.text();
-          console.log('\ud83d\udd0d Direct API returned HTML content');
+          debugLog('\ud83d\udd0d Direct API returned HTML content');
 
           // Create a DOM parser
           const parser = new DOMParser();
@@ -302,7 +311,7 @@
           const maxLimit = extractNumberFromHTML(htmlDoc, 'maxLimit');
 
           if (minLimit !== null || maxLimit !== null) {
-            console.log(`✅ Extracted limits from HTML in direct API call: min=${minLimit}, max=${maxLimit}`);
+            debugLog(`✅ Extracted limits from HTML in direct API call: min=${minLimit}, max=${maxLimit}`);
             return {
               minLimit: minLimit,
               maxLimit: maxLimit,
@@ -363,7 +372,7 @@
   // Function to check the current cart
   async function checkCurrentCart() {
     try {
-      console.log("Checking current cart contents...");
+      debugLog("Checking current cart contents...");
       const response = await originalFetch('/cart.js', {
         method: 'GET',
         headers: { 'Accept': 'application/json' }
@@ -371,7 +380,7 @@
 
       if (response.ok) {
         const cart = await response.json();
-        console.log("Current cart:", cart);
+        debugLog("Current cart:", cart);
 
         if (cart && cart.items) {
           // Get the product ID we're tracking
@@ -384,12 +393,12 @@
             const itemProductId = item.product_id;
             if (itemProductId == productId) {
               quantity += item.quantity;
-              console.log(`Found ${item.quantity} of product ${productId} in cart`);
+              debugLog(`Found ${item.quantity} of product ${productId} in cart`);
             }
           }
 
           currentCartQuantity = quantity;
-          console.log(`Total quantity of product ${productId} in cart: ${currentCartQuantity}`);
+          debugLog(`Total quantity of product ${productId} in cart: ${currentCartQuantity}`);
           return quantity;
         }
       }
@@ -405,7 +414,7 @@
     if (!limits) return { valid: true };
 
     const totalQuantity = currentCartQuantity + parseInt(newQuantity, 10);
-    console.log(`Validating total quantity: ${currentCartQuantity} (in cart) + ${newQuantity} (adding) = ${totalQuantity}, min: ${limits.minLimit}, max: ${limits.maxLimit}`);
+    debugLog(`Validating total quantity: ${currentCartQuantity} (in cart) + ${newQuantity} (adding) = ${totalQuantity}, min: ${limits.minLimit}, max: ${limits.maxLimit}`);
 
     // No longer returning invalid for exceeding limits
     // Instead, return an object with validation information
@@ -448,7 +457,7 @@
   // Modify only the fetchOrderLimits function in your orderLimitValidator.js
   async function fetchOrderLimits(productId) {
     // Log what we're about to do
-    console.log(`\ud83d\udd0e Attempting to fetch order limits for product ID: ${productId}`);
+    debugLog(`\ud83d\udd0e Attempting to fetch order limits for product ID: ${productId}`);
 
     try {
       // Add a timestamp to prevent caching and shop parameter to identify the shop
@@ -460,7 +469,7 @@
       // Shopify will add the signature
       const url = `${APP_PROXY_PATH}?path=product-limits-${productId}&shop=${shopParam}&t=${timestamp}`;
 
-      console.log(`\ud83d\udd0d Making request to: ${url}`);
+      debugLog(`\ud83d\udd0d Making request to: ${url}`);
       const response = await fetch(url, {
         headers: {
           'Accept': 'application/json',
@@ -468,9 +477,9 @@
         }
       });
 
-      console.log(`\ud83d\udce5 Response status: ${response.status}`);
+      debugLog(`\ud83d\udce5 Response status: ${response.status}`);
       const contentType = response.headers.get('content-type');
-      console.log(`\ud83d\udce5 Response content type: ${contentType || 'not specified'}`);
+      debugLog(`\ud83d\udce5 Response content type: ${contentType || 'not specified'}`);
 
       if (!response.ok) {
         console.error(`❌ Error response: ${response.status} ${response.statusText}`);
@@ -479,7 +488,7 @@
         if (contentType && contentType.includes('application/json')) {
           try {
             const data = await response.json();
-            console.log('✅ Successfully received JSON data:', data);
+            debugLog('✅ Successfully received JSON data:', data);
 
             if (data && (data.minLimit !== undefined || data.maxLimit !== undefined)) {
               return data;
@@ -490,11 +499,11 @@
         }
         // Handle HTML response
         else {
-          console.log(`\ud83d\udce5 Received non-JSON response, trying alternative app proxy path...`);
+          debugLog(`\ud83d\udce5 Received non-JSON response, trying alternative app proxy path...`);
 
           // Try an alternative app proxy path format as a fallback
           const alternativeUrl = `${APP_PROXY_PATH}/product-limits/${productId}?shop=${shopParam}&t=${timestamp}`;
-          console.log(`\ud83d\udd0d Trying alternative URL: ${alternativeUrl}`);
+          debugLog(`\ud83d\udd0d Trying alternative URL: ${alternativeUrl}`);
 
           const altResponse = await fetch(alternativeUrl, {
             headers: {
@@ -508,7 +517,7 @@
             if (altContentType && altContentType.includes('application/json')) {
               try {
                 const altData = await altResponse.json();
-                console.log('✅ Alternative URL succeeded:', altData);
+                debugLog('✅ Alternative URL succeeded:', altData);
                 return altData;
               } catch (error) {
                 console.error('❌ Alternative JSON parse error:', error);
@@ -650,7 +659,7 @@
 
   // Add this function to your orderLimitValidator.js file to handle cart UI
   function setupCartPageInterception() {
-    console.log('Setting up cart page interception');
+    debugLog('Setting up cart page interception');
 
     // Function to find quantity inputs on the cart page
     function findCartQuantityInputs() {
@@ -670,12 +679,12 @@
       for (const selector of possibleSelectors) {
         const inputs = document.querySelectorAll(selector);
         if (inputs.length > 0) {
-          console.log(`Found ${inputs.length} quantity inputs using selector: ${selector}`);
+          debugLog(`Found ${inputs.length} quantity inputs using selector: ${selector}`);
           return inputs;
         }
       }
 
-      console.log('Could not find cart quantity inputs');
+      debugLog('Could not find cart quantity inputs');
       return [];
     }
 
@@ -709,7 +718,7 @@
       for (const selector of possibleSelectors) {
         const foundButtons = document.querySelectorAll(selector);
         if (foundButtons.length > 0) {
-          console.log(`Found ${foundButtons.length} quantity buttons using selector: ${selector}`);
+          debugLog(`Found ${foundButtons.length} quantity buttons using selector: ${selector}`);
           buttons = [...buttons, ...foundButtons];
         }
       }
@@ -720,7 +729,7 @@
     // Cache the product ID we're monitoring
     const productId = getProductId();
     if (!productId) {
-      console.log('No product ID to monitor on this page');
+      debugLog('No product ID to monitor on this page');
       return;
     }
 
@@ -756,15 +765,15 @@
                 const productUrl = productLink.getAttribute('href');
                 // Extract the handle and query the page
                 // This is approximate as we can't reliably get the product ID from the handle
-                console.log('Found product URL:', productUrl);
+                debugLog('Found product URL:', productUrl);
               }
             }
 
-            console.log('Cart item product ID:', itemProductId, 'Monitoring product ID:', productId);
+            debugLog('Cart item product ID:', itemProductId, 'Monitoring product ID:', productId);
 
             // If this is our monitored product (or we couldn't determine), validate
             if (!itemProductId || itemProductId === productId) {
-              console.log(`Validating cart quantity change: ${newValue}, max: ${productLimits?.maxLimit}`);
+              debugLog(`Validating cart quantity change: ${newValue}, max: ${productLimits?.maxLimit}`);
 
               if (productLimits && newValue > productLimits.maxLimit) {
                 console.warn(`Prevented quantity change: ${newValue} exceeds max ${productLimits.maxLimit}`);
@@ -820,7 +829,7 @@
 
           // If this is our monitored product (or we couldn't determine), validate
           if (!itemProductId || itemProductId === productId) {
-            console.log(`Validating quantity button ${isIncrease ? 'increase' : 'decrease'}: ${newValue}, max: ${productLimits?.maxLimit}`);
+            debugLog(`Validating quantity button ${isIncrease ? 'increase' : 'decrease'}: ${newValue}, max: ${productLimits?.maxLimit}`);
 
             if (productLimits && isIncrease && newValue > productLimits.maxLimit) {
               console.warn(`Prevented quantity button: ${newValue} exceeds max ${productLimits.maxLimit}`);
@@ -865,7 +874,7 @@
         });
 
         if (shouldRecheck) {
-          console.log('Cart contents changed, re-running interception');
+          debugLog('Cart contents changed, re-running interception');
           interceptQuantityInputs();
           interceptQuantityButtons();
         }
@@ -894,12 +903,12 @@
 
     // Find all checkout buttons
     const checkoutButtons = findCheckoutButtons();
-    console.log(`Found ${checkoutButtons.length} checkout buttons`);
+    debugLog(`Found ${checkoutButtons.length} checkout buttons`);
 
     if (!validationResult.withinLimits) {
       // Disable checkout buttons
       checkoutButtons.forEach(button => {
-        console.log('Disabling checkout button:', button);
+        debugLog('Disabling checkout button:', button);
 
         // Store original state for re-enabling later
         if (!button.hasAttribute('data-original-disabled')) {
@@ -1086,13 +1095,13 @@
   XMLHttpRequest.prototype.send = function(body) {
     // Check if this is a cart/add request
     if (typeof this._orderLimitUrl === 'string' && this._orderLimitUrl.includes('/cart/add')) {
-      console.log('Intercepted XHR cart/add request');
+      debugLog('Intercepted XHR cart/add request');
 
       try {
         // Add readystatechange handler to check results after request completes
         this.addEventListener('readystatechange', function() {
           if (this.readyState === 4) {
-            console.log('XHR request completed, updating checkout state');
+            debugLog('XHR request completed, updating checkout state');
             setTimeout(() => {
               checkCurrentCart().then(() => updateCheckoutButtonsState());
             }, 500);
@@ -1104,13 +1113,13 @@
     }
     // Handle cart/change requests
     else if (typeof this._orderLimitUrl === 'string' && this._orderLimitUrl.includes('/cart/change')) {
-      console.log('Intercepted XHR cart/change request');
+      debugLog('Intercepted XHR cart/change request');
 
       try {
         // Add readystatechange handler to check results after request completes
         this.addEventListener('readystatechange', function() {
           if (this.readyState === 4) {
-            console.log('XHR cart/change completed, updating checkout state');
+            debugLog('XHR cart/change completed, updating checkout state');
             setTimeout(() => {
               checkCurrentCart().then(() => updateCheckoutButtonsState());
             }, 500);
@@ -1128,7 +1137,7 @@
   async function initializeValidation() {
     const productId = getProductId();
     if (!productId) {
-      console.log('Not on a product page or could not determine product ID');
+      debugLog('Not on a product page or could not determine product ID');
       return;
     }
 
@@ -1138,7 +1147,7 @@
     // Check if we're on a cart page
     const onCartPage = window.location.pathname.includes('/cart');
     if (onCartPage) {
-      console.log('On cart page, setting up additional interception');
+      debugLog('On cart page, setting up additional interception');
       setupCartPageInterception();
     }
 
@@ -1147,14 +1156,14 @@
     productLimits = limits; // Store globally
 
     if (!limits) {
-      console.log('No limits could be retrieved for this product');
+      debugLog('No limits could be retrieved for this product');
       return;
     }
 
     // Log the source of our limits
-    console.log(`Order limits for product ${productId}:`, limits);
-    console.log(`Source: ${limits.source || 'API'}`);
-    console.log(`Min: ${limits.minLimit}, Max: ${limits.maxLimit}`);
+    debugLog(`Order limits for product ${productId}:`, limits);
+    debugLog(`Source: ${limits.source || 'API'}`);
+    debugLog(`Min: ${limits.minLimit}, Max: ${limits.maxLimit}`);
 
     // Update checkout buttons state based on current cart
     updateCheckoutButtonsState();
@@ -1168,7 +1177,7 @@
     // REMOVE the validation for quantity input and form submission since we're allowing any quantity
     // Instead, update the UI after any cart changes
 
-    console.log('Order limit validation initialized for product', productId);
+    debugLog('Order limit validation initialized for product', productId);
   }
 
   // ADD this new function
@@ -1207,7 +1216,7 @@
       });
 
       if (cartUpdated) {
-        console.log('Cart content changed, updating checkout buttons');
+        debugLog('Cart content changed, updating checkout buttons');
         setTimeout(() => updateCheckoutButtonsState(), 500);
       }
     });
@@ -1222,7 +1231,7 @@
           attributes: true,
           characterData: false
         });
-        console.log('Observing cart container for changes:', container);
+        debugLog('Observing cart container for changes:', container);
       }
     });
   }
@@ -1253,7 +1262,7 @@
           }
 
           if (checkoutButtonAdded) {
-            console.log('New checkout button detected, updating state');
+            debugLog('New checkout button detected, updating state');
             setTimeout(() => updateCheckoutButtonsState(), 100);
           }
         }
@@ -1265,7 +1274,7 @@
       childList: true,
       subtree: true
     });
-    console.log('Observing document for new checkout buttons');
+    debugLog('Observing document for new checkout buttons');
   }
 
 
