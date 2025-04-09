@@ -1133,52 +1133,59 @@ function debugLog(...args) {
     originalXHRSend.apply(this, arguments);
   };
 
-  // MODIFY the initializeValidation function
   async function initializeValidation() {
     const productId = getProductId();
     if (!productId) {
       debugLog('Not on a product page or could not determine product ID');
+      // Re-enable any initially disabled buttons
+      document.querySelectorAll('.limit-initial-disabled').forEach(button => {
+        button.classList.remove('limit-initial-disabled');
+        button.disabled = false;
+        button.style.opacity = '';
+        button.style.cursor = '';
+        button.style.pointerEvents = '';
+      });
       return;
     }
-
-    // Check current cart before fetching limits
-    await checkCurrentCart();
-
+  
+    // Start both operations in parallel
+    const cartPromise = checkCurrentCart();
+    const limitsPromise = fetchOrderLimits(productId);
+  
+    // Wait for both operations to complete
+    const [_, limits] = await Promise.all([cartPromise, limitsPromise]);
+    productLimits = limits;
+  
+    if (!limits) {
+      debugLog('No limits could be retrieved for this product');
+      // Re-enable any initially disabled buttons
+      document.querySelectorAll('.limit-initial-disabled').forEach(button => {
+        button.classList.remove('limit-initial-disabled');
+        button.disabled = false;
+        button.style.opacity = '';
+        button.style.cursor = '';
+        button.style.pointerEvents = '';
+      });
+      return;
+    }
+  
+    // Now update checkout buttons state
+    updateCheckoutButtonsState();
+  
     // Check if we're on a cart page
     const onCartPage = window.location.pathname.includes('/cart');
     if (onCartPage) {
       debugLog('On cart page, setting up additional interception');
       setupCartPageInterception();
     }
-
-    // Fetch limits for this product
-    const limits = await fetchOrderLimits(productId);
-    productLimits = limits; // Store globally
-
-    if (!limits) {
-      debugLog('No limits could be retrieved for this product');
-      return;
-    }
-
-    // Log the source of our limits
-    debugLog(`Order limits for product ${productId}:`, limits);
-    debugLog(`Source: ${limits.source || 'API'}`);
-    debugLog(`Min: ${limits.minLimit}, Max: ${limits.maxLimit}`);
-
-    // Update checkout buttons state based on current cart
-    updateCheckoutButtonsState();
-
-    // Set up a mutation observer for cart updates
+  
+    // These can happen after the initial validation is complete
     setupCartUpdateObserver();
-
-    // Set up checkout button observer to catch dynamically added checkout buttons
     setupCheckoutButtonObserver();
-
-    // REMOVE the validation for quantity input and form submission since we're allowing any quantity
-    // Instead, update the UI after any cart changes
-
+    
     debugLog('Order limit validation initialized for product', productId);
   }
+  
 
   // ADD this new function
   function setupCartUpdateObserver() {
