@@ -456,84 +456,68 @@ function debugLog(...args) {
 
   // Modify only the fetchOrderLimits function in your orderLimitValidator.js
   async function fetchOrderLimits(productId) {
-    // Log what we're about to do
-    debugLog(`\ud83d\udd0e Attempting to fetch order limits for product ID: ${productId}`);
-
     try {
-      // Add a timestamp to prevent caching and shop parameter to identify the shop
       const timestamp = new Date().getTime();
       const shopParam = window.Shopify?.shop || window.location.hostname;
-
-      // IMPORTANT: This is the proper format for Shopify App Proxy requests
-      // Format: /apps/[subpath]/[optional custom path]?shop=[shop]&timestamp=[timestamp]
-      // Shopify will add the signature
-      const url = `${APP_PROXY_PATH}?path=product-limits-${productId}&shop=${shopParam}&t=${timestamp}`;
-
-      debugLog(`\ud83d\udd0d Making request to: ${url}`);
-      const response = await fetch(url, {
+      
+      // Try both URL formats in parallel instead of sequentially
+      const url1 = `${APP_PROXY_PATH}?path=product-limits-${productId}&shop=${shopParam}&t=${timestamp}`;
+      const url2 = `${APP_PROXY_PATH}/product-limits/${productId}?shop=${shopParam}&t=${timestamp}`;
+      
+      const requestOptions = {
         headers: {
           'Accept': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'  // This can help avoid some caching issues
+          'X-Requested-With': 'XMLHttpRequest'
         }
-      });
-
-      debugLog(`\ud83d\udce5 Response status: ${response.status}`);
-      const contentType = response.headers.get('content-type');
-      debugLog(`\ud83d\udce5 Response content type: ${contentType || 'not specified'}`);
-
-      if (!response.ok) {
-        console.error(`❌ Error response: ${response.status} ${response.statusText}`);
-      } else {
-        // Handle JSON response
+      };
+      
+      // Make both requests in parallel
+      const [response1, response2] = await Promise.allSettled([
+        fetch(url1, requestOptions),
+        fetch(url2, requestOptions)
+      ]);
+      
+      // Try to get data from the first successful response
+      let data = null;
+      
+      // Check first response
+      if (response1.status === 'fulfilled' && response1.value.ok) {
+        const resp = response1.value;
+        const contentType = resp.headers.get('content-type');
+        
         if (contentType && contentType.includes('application/json')) {
           try {
-            const data = await response.json();
-            debugLog('✅ Successfully received JSON data:', data);
-
+            data = await resp.json();
             if (data && (data.minLimit !== undefined || data.maxLimit !== undefined)) {
               return data;
             }
-          } catch (jsonError) {
-            console.error('❌ JSON parse error:', jsonError);
-          }
-        }
-        // Handle HTML response
-        else {
-          debugLog(`\ud83d\udce5 Received non-JSON response, trying alternative app proxy path...`);
-
-          // Try an alternative app proxy path format as a fallback
-          const alternativeUrl = `${APP_PROXY_PATH}/product-limits/${productId}?shop=${shopParam}&t=${timestamp}`;
-          debugLog(`\ud83d\udd0d Trying alternative URL: ${alternativeUrl}`);
-
-          const altResponse = await fetch(alternativeUrl, {
-            headers: {
-              'Accept': 'application/json',
-              'X-Requested-With': 'XMLHttpRequest'
-            }
-          });
-
-          if (altResponse.ok) {
-            const altContentType = altResponse.headers.get('content-type');
-            if (altContentType && altContentType.includes('application/json')) {
-              try {
-                const altData = await altResponse.json();
-                debugLog('✅ Alternative URL succeeded:', altData);
-                return altData;
-              } catch (error) {
-                console.error('❌ Alternative JSON parse error:', error);
-              }
-            }
-          }
+          } catch (e) { /* Continue to next attempt */ }
         }
       }
-
-      // If we reach this point, try fallbacks
-      return await directApiCall(productId) || getHardcodedLimits(productId);
+      
+      // Check second response
+      if (response2.status === 'fulfilled' && response2.value.ok) {
+        const resp = response2.value;
+        const contentType = resp.headers.get('content-type');
+        
+        if (contentType && contentType.includes('application/json')) {
+          try {
+            data = await resp.json();
+            if (data && (data.minLimit !== undefined || data.maxLimit !== undefined)) {
+              return data;
+            }
+          } catch (e) { /* Continue to fallback */ }
+        }
+      }
+      
+      // Immediately use hardcoded fallback if API calls fail
+      return getHardcodedLimits(productId);
     } catch (error) {
       console.error('❌ Fetch error:', error);
       return getHardcodedLimits(productId);
     }
   }
+  
 
 
   // Helper function to extract numbers from HTML elements
