@@ -677,11 +677,11 @@ function debugLog(...args) {
       ['change', 'input'].forEach(eventType => {
         input.addEventListener(eventType, function() {
           // After a short delay, update checkout buttons
-          setTimeout(() => {
+          requestAnimationFrame(() => {
             checkCurrentCart().then(() => {
               updateCheckoutButtonsState();
             });
-          }, 500);
+          });
         });
       });
     });
@@ -829,7 +829,7 @@ function debugLog(...args) {
     }
 
     // Run interception setup
-    setTimeout(() => {
+    requestAnimationFrame(() => {
       interceptQuantityInputs();
       interceptQuantityButtons();
 
@@ -866,7 +866,7 @@ function debugLog(...args) {
       if (cartContainer) {
         observer.observe(cartContainer, { childList: true, subtree: true });
       }
-    }, 500); // Small delay to ensure elements are loaded
+    }); // Small delay to ensure elements are loaded
   }
 
 
@@ -1094,9 +1094,9 @@ function debugLog(...args) {
         this.addEventListener('readystatechange', function() {
           if (this.readyState === 4) {
             debugLog('XHR request completed, updating checkout state');
-            setTimeout(() => {
+            requestAnimationFrame(() => {
               checkCurrentCart().then(() => updateCheckoutButtonsState());
-            }, 500);
+            });
           }
         });
       } catch (error) {
@@ -1112,9 +1112,9 @@ function debugLog(...args) {
         this.addEventListener('readystatechange', function() {
           if (this.readyState === 4) {
             debugLog('XHR cart/change completed, updating checkout state');
-            setTimeout(() => {
+            requestAnimationFrame(() => {
               checkCurrentCart().then(() => updateCheckoutButtonsState());
-            }, 500);
+            });
           }
         });
       } catch (error) {
@@ -1216,7 +1216,7 @@ function debugLog(...args) {
 
       if (cartUpdated) {
         debugLog('Cart content changed, updating checkout buttons');
-        setTimeout(() => updateCheckoutButtonsState(), 500);
+        requestAnimationFrame(() => updateCheckoutButtonsState());
       }
     });
 
@@ -1262,7 +1262,7 @@ function debugLog(...args) {
 
           if (checkoutButtonAdded) {
             debugLog('New checkout button detected, updating state');
-            setTimeout(() => updateCheckoutButtonsState(), 100);
+            requestAnimationFrame(() => updateCheckoutButtonsState());
           }
         }
       });
@@ -1277,10 +1277,14 @@ function debugLog(...args) {
   }
 
 
-  // Start validation when the page is ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeValidation);
-  } else {
-    initializeValidation();
-  }
+if (document.readyState === 'loading') {
+  // Start immediately but also ensure it runs after content loads
+  initializeValidation();
+  document.addEventListener('DOMContentLoaded', function() {
+    // Make sure all buttons are found and properly set up
+    updateCheckoutButtonsState();
+  });
+} else {
+  initializeValidation();
+}
 })();
