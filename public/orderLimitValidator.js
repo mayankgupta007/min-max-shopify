@@ -372,35 +372,31 @@ function debugLog(...args) {
   // Function to check the current cart
   async function checkCurrentCart() {
     try {
-      debugLog("Checking current cart contents...");
-      const response = await originalFetch('/cart.js', {
+      const response = await fetch('/cart.js', {
         method: 'GET',
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Accept': 'application/json' },
+        // Add cache: 'no-store' to avoid browser caching
+        cache: 'no-store'
       });
-
+  
       if (response.ok) {
         const cart = await response.json();
-        debugLog("Current cart:", cart);
-
-        if (cart && cart.items) {
-          // Get the product ID we're tracking
-          const productId = getProductId();
-          if (!productId) return 0;
-
-          // Find any matching items in the cart
-          let quantity = 0;
-          for (const item of cart.items) {
-            const itemProductId = item.product_id;
-            if (itemProductId == productId) {
-              quantity += item.quantity;
-              debugLog(`Found ${item.quantity} of product ${productId} in cart`);
-            }
+        
+        // Get the product ID we're tracking
+        const productId = getProductId();
+        if (!productId) return 0;
+  
+        // Find any matching items in the cart
+        let quantity = 0;
+        for (const item of cart.items) {
+          const itemProductId = item.product_id;
+          if (itemProductId == productId) {
+            quantity += item.quantity;
           }
-
-          currentCartQuantity = quantity;
-          debugLog(`Total quantity of product ${productId} in cart: ${currentCartQuantity}`);
-          return quantity;
         }
+  
+        currentCartQuantity = quantity;
+        return quantity;
       }
       return 0;
     } catch (error) {
@@ -408,6 +404,7 @@ function debugLog(...args) {
       return 0;
     }
   }
+  
 
   // REPLACE the existing validateTotalQuantity function with this:
   function validateTotalQuantity(newQuantity, limits) {
