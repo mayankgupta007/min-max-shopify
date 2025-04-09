@@ -378,14 +378,14 @@ function debugLog(...args) {
         // Add cache: 'no-store' to avoid browser caching
         cache: 'no-store'
       });
-  
+
       if (response.ok) {
         const cart = await response.json();
-        
+
         // Get the product ID we're tracking
         const productId = getProductId();
         if (!productId) return 0;
-  
+
         // Find any matching items in the cart
         let quantity = 0;
         for (const item of cart.items) {
@@ -394,7 +394,7 @@ function debugLog(...args) {
             quantity += item.quantity;
           }
         }
-  
+
         currentCartQuantity = quantity;
         return quantity;
       }
@@ -404,7 +404,7 @@ function debugLog(...args) {
       return 0;
     }
   }
-  
+
 
   // REPLACE the existing validateTotalQuantity function with this:
   function validateTotalQuantity(newQuantity, limits) {
@@ -456,32 +456,32 @@ function debugLog(...args) {
     try {
       const timestamp = new Date().getTime();
       const shopParam = window.Shopify?.shop || window.location.hostname;
-      
+
       // Try both URL formats in parallel instead of sequentially
       const url1 = `${APP_PROXY_PATH}?path=product-limits-${productId}&shop=${shopParam}&t=${timestamp}`;
       const url2 = `${APP_PROXY_PATH}/product-limits/${productId}?shop=${shopParam}&t=${timestamp}`;
-      
+
       const requestOptions = {
         headers: {
           'Accept': 'application/json',
           'X-Requested-With': 'XMLHttpRequest'
         }
       };
-      
+
       // Make both requests in parallel
       const [response1, response2] = await Promise.allSettled([
         fetch(url1, requestOptions),
         fetch(url2, requestOptions)
       ]);
-      
+
       // Try to get data from the first successful response
       let data = null;
-      
+
       // Check first response
       if (response1.status === 'fulfilled' && response1.value.ok) {
         const resp = response1.value;
         const contentType = resp.headers.get('content-type');
-        
+
         if (contentType && contentType.includes('application/json')) {
           try {
             data = await resp.json();
@@ -491,12 +491,12 @@ function debugLog(...args) {
           } catch (e) { /* Continue to next attempt */ }
         }
       }
-      
+
       // Check second response
       if (response2.status === 'fulfilled' && response2.value.ok) {
         const resp = response2.value;
         const contentType = resp.headers.get('content-type');
-        
+
         if (contentType && contentType.includes('application/json')) {
           try {
             data = await resp.json();
@@ -506,7 +506,7 @@ function debugLog(...args) {
           } catch (e) { /* Continue to fallback */ }
         }
       }
-      
+
       // Immediately use hardcoded fallback if API calls fail
       return getHardcodedLimits(productId);
     } catch (error) {
@@ -514,7 +514,7 @@ function debugLog(...args) {
       return getHardcodedLimits(productId);
     }
   }
-  
+
 
 
   // Helper function to extract numbers from HTML elements
@@ -874,8 +874,16 @@ function debugLog(...args) {
   // ADD these new functions
   // Function to update all checkout buttons based on current cart state
   async function updateCheckoutButtonsState() {
-    // Re-check the cart to get latest quantities
-    await checkCurrentCart();
+    // Don't re-check cart if this is the initial page load validation
+    // (we've already checked it in initializeValidation)
+    if (!document.querySelector('.limit-initial-disabled')) {
+      await checkCurrentCart();
+    } else {
+      // Remove the initial disabled class since we're processing for real now
+      document.querySelectorAll('.limit-initial-disabled').forEach(button => {
+        button.classList.remove('limit-initial-disabled');
+      });
+    }
 
     if (!productLimits) return;
 
@@ -884,14 +892,11 @@ function debugLog(...args) {
 
     // Find all checkout buttons
     const checkoutButtons = findCheckoutButtons();
-    debugLog(`Found ${checkoutButtons.length} checkout buttons`);
 
     if (!validationResult.withinLimits) {
       // Disable checkout buttons
       checkoutButtons.forEach(button => {
-        debugLog('Disabling checkout button:', button);
-
-        // Store original state for re-enabling later
+        // Don't store original state if we already have 
         if (!button.hasAttribute('data-original-disabled')) {
           button.setAttribute('data-original-disabled', button.disabled || false);
           button.setAttribute('data-original-style', button.getAttribute('style') || '');
@@ -903,8 +908,6 @@ function debugLog(...args) {
         button.style.opacity = '0.5';
         button.style.cursor = 'not-allowed';
         button.style.pointerEvents = 'none';
-
-        // If using a custom theme with special styling
         button.classList.add('limit-disabled');
 
         // Add warning to innerHTML if possible
@@ -934,6 +937,13 @@ function debugLog(...args) {
           button.removeAttribute('data-original-disabled');
           button.removeAttribute('data-original-style');
           button.removeAttribute('data-original-html');
+        } else {
+          // This is a button that was initially disabled
+          button.disabled = false;
+          button.style.opacity = '';
+          button.style.cursor = '';
+          button.style.pointerEvents = '';
+          button.classList.remove('limit-disabled');
         }
       });
 
@@ -941,6 +951,7 @@ function debugLog(...args) {
       clearLimitWarning();
     }
   }
+
 
   // Function to find all checkout buttons
   function findCheckoutButtons() {
@@ -1128,15 +1139,15 @@ function debugLog(...args) {
       });
       return;
     }
-  
+
     // Start both operations in parallel
     const cartPromise = checkCurrentCart();
     const limitsPromise = fetchOrderLimits(productId);
-  
+
     // Wait for both operations to complete
     const [_, limits] = await Promise.all([cartPromise, limitsPromise]);
     productLimits = limits;
-  
+
     if (!limits) {
       debugLog('No limits could be retrieved for this product');
       // Re-enable any initially disabled buttons
@@ -1149,24 +1160,24 @@ function debugLog(...args) {
       });
       return;
     }
-  
+
     // Now update checkout buttons state
     updateCheckoutButtonsState();
-  
+
     // Check if we're on a cart page
     const onCartPage = window.location.pathname.includes('/cart');
     if (onCartPage) {
       debugLog('On cart page, setting up additional interception');
       setupCartPageInterception();
     }
-  
+
     // These can happen after the initial validation is complete
     setupCartUpdateObserver();
     setupCheckoutButtonObserver();
-    
+
     debugLog('Order limit validation initialized for product', productId);
   }
-  
+
 
   // ADD this new function
   function setupCartUpdateObserver() {
