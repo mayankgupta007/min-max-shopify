@@ -389,26 +389,22 @@ function debugLog(...args) {
       const response = await fetch('/cart.js', {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
-        // Add cache: 'no-store' to avoid browser caching
         cache: 'no-store'
       });
-
+  
       if (response.ok) {
         const cart = await response.json();
-
-        // Get the product ID we're tracking
         const productId = getProductId();
         if (!productId) return 0;
-
-        // Find any matching items in the cart
+  
+        // Optimize this loop for speed
         let quantity = 0;
-        for (const item of cart.items) {
-          const itemProductId = item.product_id;
-          if (itemProductId == productId) {
-            quantity += item.quantity;
+        for (let i = 0; i < cart.items.length; i++) {
+          if (cart.items[i].product_id == productId) {
+            quantity += cart.items[i].quantity;
           }
         }
-
+  
         currentCartQuantity = quantity;
         return quantity;
       }
@@ -418,6 +414,7 @@ function debugLog(...args) {
       return 0;
     }
   }
+  
 
 
   // REPLACE the existing validateTotalQuantity function with this:
