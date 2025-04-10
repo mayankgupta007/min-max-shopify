@@ -470,64 +470,51 @@ function debugLog(...args) {
     try {
       const timestamp = new Date().getTime();
       const shopParam = window.Shopify?.shop || window.location.hostname;
-
-      // Try both URL formats in parallel instead of sequentially
+  
+      // Try both URL formats in parallel
       const url1 = `${APP_PROXY_PATH}?path=product-limits-${productId}&shop=${shopParam}&t=${timestamp}`;
       const url2 = `${APP_PROXY_PATH}/product-limits/${productId}?shop=${shopParam}&t=${timestamp}`;
-
+  
       const requestOptions = {
         headers: {
           'Accept': 'application/json',
           'X-Requested-With': 'XMLHttpRequest'
         }
       };
-
-      // Make both requests in parallel
-      const [response1, response2] = await Promise.allSettled([
+  
+      // Make both requests in parallel - leveraging Promise.allSettled to handle failures gracefully
+      const responses = await Promise.allSettled([
         fetch(url1, requestOptions),
         fetch(url2, requestOptions)
       ]);
-
-      // Try to get data from the first successful response
-      let data = null;
-
-      // Check first response
-      if (response1.status === 'fulfilled' && response1.value.ok) {
-        const resp = response1.value;
-        const contentType = resp.headers.get('content-type');
-
-        if (contentType && contentType.includes('application/json')) {
-          try {
-            data = await resp.json();
-            if (data && (data.minLimit !== undefined || data.maxLimit !== undefined)) {
-              return data;
+  
+      // Process responses in order
+      for (const response of responses) {
+        if (response.status === 'fulfilled' && response.value.ok) {
+          const contentType = response.value.headers.get('content-type');
+          
+          if (contentType && contentType.includes('application/json')) {
+            try {
+              const data = await response.value.json();
+              if (data && (data.minLimit !== undefined || data.maxLimit !== undefined)) {
+                return data;
+              }
+            } catch (e) {
+              // Continue to next response on error
+              debugLog('JSON parse error for response:', e);
             }
-          } catch (e) { /* Continue to next attempt */ }
+          }
         }
       }
-
-      // Check second response
-      if (response2.status === 'fulfilled' && response2.value.ok) {
-        const resp = response2.value;
-        const contentType = resp.headers.get('content-type');
-
-        if (contentType && contentType.includes('application/json')) {
-          try {
-            data = await resp.json();
-            if (data && (data.minLimit !== undefined || data.maxLimit !== undefined)) {
-              return data;
-            }
-          } catch (e) { /* Continue to fallback */ }
-        }
-      }
-
-      // Immediately use hardcoded fallback if API calls fail
-      return getHardcodedLimits(productId);
+  
+      // If no valid responses, return null to keep checkout disabled
+      return null;
     } catch (error) {
-      console.error('❌ Fetch error:', error);
-      return getHardcodedLimits(productId);
+      console.error('Fetch error in fetchOrderLimits:', error);
+      return null;
     }
   }
+  
 
 
 
