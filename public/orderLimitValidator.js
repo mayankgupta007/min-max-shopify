@@ -12,7 +12,12 @@
   });
 })();
 
-const DEBUG_MODE = false;
+const DEBUG_MODE = true;
+let validationInProgress = false;
+let lastButtonStateUpdate = 0;
+const BUTTON_UPDATE_COOLDOWN = 50; // Milliseconds to throttle button state updates
+let disableCheckoutTimer = null;
+let pendingValidation = false;
 
 // Replace all debugLog calls with this function
 function debugLog(...args) {
@@ -415,6 +420,80 @@ function debugLog(...args) {
     }
   }
   
+
+  // Function to immediately disable checkout buttons - this gets called FIRST on any cart change
+function immediatelyDisableCheckoutButtons() {
+  // Record time of this update to avoid excessive updates
+  const now = Date.now();
+  if (now - lastButtonStateUpdate < BUTTON_UPDATE_COOLDOWN) {
+    pendingValidation = true;
+    return; // Skip this update as we've just updated recently
+  }
+  
+  lastButtonStateUpdate = now;
+  validationInProgress = true;
+  
+  // Find all checkout buttons using a comprehensive set of selectors
+  const selectors = [
+    'button[name="checkout"]', 
+    'input[name="checkout"]', 
+    '.shopify-payment-button__button', 
+    '.additional-checkout-buttons button',
+    '.additional-checkout-buttons a',
+    '.cart__checkout', 
+    '#checkout', 
+    '.checkout-button',
+    'a[href="/checkout"]',
+    'form[action="/cart"] [type="submit"]',
+    'form[action="/checkout"] [type="submit"]'
+  ];
+  
+  // Keep track of the buttons we've found for debugging
+  const foundButtons = [];
+  
+  // Process each selector
+  selectors.forEach(selector => {
+    try {
+      document.querySelectorAll(selector).forEach(button => {
+        // Only store original state if we haven't already
+        if (!button.hasAttribute('data-original-disabled')) {
+          button.setAttribute('data-original-disabled', button.disabled || false);
+          button.setAttribute('data-original-opacity', button.style.opacity || '');
+          button.setAttribute('data-original-pointer-events', button.style.pointerEvents || '');
+          button.setAttribute('data-original-cursor', button.style.cursor || '');
+        }
+        
+        // Aggressively disable the button
+        button.disabled = true;
+        button.style.opacity = '0.5';
+        button.style.pointerEvents = 'none';
+        button.style.cursor = 'not-allowed';
+        button.classList.add('limit-disabled');
+        
+        foundButtons.push(button);
+      });
+    } catch (e) {
+      console.error(`Error finding buttons with selector ${selector}:`, e);
+    }
+  });
+  
+  debugLog(`Immediately disabled ${foundButtons.length} checkout buttons`);
+  
+  // Schedule a safety check to ensure validation completes
+  if (disableCheckoutTimer) {
+    clearTimeout(disableCheckoutTimer);
+  }
+  
+  disableCheckoutTimer = setTimeout(() => {
+    if (validationInProgress) {
+      debugLog('Safety timeout: validation is taking too long, keeping buttons disabled');
+      validationInProgress = false;
+      // Don't re-enable buttons when the safety timeout fires
+    }
+  }, 5000); // 5 second safety timeout
+  
+  return foundButtons;
+}
 
 
   // REPLACE the existing validateTotalQuantity function with this:
@@ -882,74 +961,125 @@ function debugLog(...args) {
         button.classList.remove('limit-initial-disabled');
       });
     }
-
-    if (!productLimits) return;
-
-    // Validate the current quantity against limits
-    const validationResult = validateTotalQuantity(0, productLimits); // 0 because we're checking current cart only
-
-    // Find all checkout buttons
-    const checkoutButtons = findCheckoutButtons();
-
-    if (!validationResult.withinLimits) {
-      // Disable checkout buttons
-      checkoutButtons.forEach(button => {
-        // Don't store original state if we already have 
-        if (!button.hasAttribute('data-original-disabled')) {
-          button.setAttribute('data-original-disabled', button.disabled || false);
-          button.setAttribute('data-original-style', button.getAttribute('style') || '');
-          button.setAttribute('data-original-html', button.innerHTML);
-        }
-
-        // Disable and style the button
-        button.disabled = true;
-        button.style.opacity = '0.5';
-        button.style.cursor = 'not-allowed';
-        button.style.pointerEvents = 'none';
-        button.classList.add('limit-disabled');
-
-        // Add warning to innerHTML if possible
-        if (!button.querySelector('.limit-warning-text')) {
-          const warningSpan = document.createElement('span');
-          warningSpan.className = 'limit-warning-text';
-          warningSpan.style.marginLeft = '5px';
-          warningSpan.style.fontSize = '80%';
-          warningSpan.innerHTML = '⚠️';
-          button.appendChild(warningSpan);
-        }
-      });
-
-      // Show warning message
-      showLimitWarning(validationResult.message);
-    } else {
-      // Re-enable checkout buttons
-      checkoutButtons.forEach(button => {
-        if (button.hasAttribute('data-original-disabled')) {
-          const wasDisabled = button.getAttribute('data-original-disabled') === 'true';
-          button.disabled = wasDisabled;
-          button.style = button.getAttribute('data-original-style');
-          button.innerHTML = button.getAttribute('data-original-html');
-          button.classList.remove('limit-disabled');
-
-          // Remove data attributes
-          button.removeAttribute('data-original-disabled');
-          button.removeAttribute('data-original-style');
-          button.removeAttribute('data-original-html');
-        } else {
-          // This is a button that was initially disabled
-          button.disabled = false;
-          button.style.opacity = '';
-          button.style.cursor = '';
-          button.style.pointerEvents = '';
-          button.classList.remove('limit-disabled');
-        }
-      });
-
-      // Clear warning
-      clearLimitWarning();
+  
+    // Record time of this update
+    const now = Date.now();
+    if (now - lastButtonStateUpdate < BUTTON_UPDATE_COOLDOWN) {
+      // If we've updated recently, schedule another update
+      if (!pendingValidation) {
+        pendingValidation = true;
+        setTimeout(() => {
+          pendingValidation = false;
+          updateCheckoutButtonsState();
+        }, BUTTON_UPDATE_COOLDOWN);
+      }
+      return; // Skip this update
+    }
+    
+    lastButtonStateUpdate = now;
+    
+    try {
+      if (!productLimits) {
+        // If we don't have limits, keep buttons disabled as a safety measure
+        debugLog('No product limits available, keeping checkout disabled for safety');
+        return;
+      }
+  
+      // Validate the current quantity against limits
+      const validationResult = validateTotalQuantity(0, productLimits); // 0 because we're checking current cart only
+  
+      // Find all checkout buttons
+      const checkoutButtons = findCheckoutButtons();
+      debugLog(`Found ${checkoutButtons.length} checkout buttons for state update`);
+  
+      if (!validationResult.withinLimits) {
+        // Limits not met, ensure buttons stay disabled
+        checkoutButtons.forEach(button => {
+          // Save original state if we haven't already
+          if (!button.hasAttribute('data-original-disabled')) {
+            button.setAttribute('data-original-disabled', button.disabled || false);
+            button.setAttribute('data-original-opacity', button.style.opacity || '');
+            button.setAttribute('data-original-pointer-events', button.style.pointerEvents || '');
+            button.setAttribute('data-original-cursor', button.style.cursor || '');
+          }
+  
+          // Keep button disabled
+          button.disabled = true;
+          button.style.opacity = '0.5';
+          button.style.pointerEvents = 'none';
+          button.style.cursor = 'not-allowed';
+          button.classList.add('limit-disabled');
+  
+          // Add warning to innerHTML if possible
+          if (!button.querySelector('.limit-warning-text')) {
+            try {
+              const warningSpan = document.createElement('span');
+              warningSpan.className = 'limit-warning-text';
+              warningSpan.style.marginLeft = '5px';
+              warningSpan.style.fontSize = '80%';
+              warningSpan.innerHTML = '⚠️';
+              button.appendChild(warningSpan);
+            } catch (e) {
+              // Ignore errors adding warning text
+            }
+          }
+        });
+  
+        // Show warning message
+        showLimitWarning(validationResult.message);
+      } else {
+        // Limits met, restore buttons to original state
+        checkoutButtons.forEach(button => {
+          if (button.hasAttribute('data-original-disabled')) {
+            // Only restore if we previously saved state
+            const wasDisabled = button.getAttribute('data-original-disabled') === 'true';
+            button.disabled = wasDisabled;
+            button.style.opacity = button.getAttribute('data-original-opacity');
+            button.style.pointerEvents = button.getAttribute('data-original-pointer-events');
+            button.style.cursor = button.getAttribute('data-original-cursor');
+            button.classList.remove('limit-disabled');
+            
+            // Remove warning text if it exists
+            const warningText = button.querySelector('.limit-warning-text');
+            if (warningText) {
+              button.removeChild(warningText);
+            }
+  
+            // Only remove data attributes if we're truly re-enabling
+            if (!wasDisabled) {
+              button.removeAttribute('data-original-disabled');
+              button.removeAttribute('data-original-opacity');
+              button.removeAttribute('data-original-pointer-events');
+              button.removeAttribute('data-original-cursor');
+            }
+          } else {
+            // This is a button that was preemptively disabled
+            button.disabled = false;
+            button.style.opacity = '';
+            button.style.pointerEvents = '';
+            button.style.cursor = '';
+            button.classList.remove('limit-disabled');
+          }
+        });
+  
+        // Clear warning
+        clearLimitWarning();
+      }
+    } catch (error) {
+      console.error('Error updating checkout button state:', error);
+      // In case of error, ensure buttons stay disabled as a safety measure
+    } finally {
+      // Mark validation as complete
+      validationInProgress = false;
+      
+      // Clear safety timer
+      if (disableCheckoutTimer) {
+        clearTimeout(disableCheckoutTimer);
+        disableCheckoutTimer = null;
+      }
     }
   }
-
+  
 
   // Function to find all checkout buttons
   function findCheckoutButtons() {
@@ -1074,70 +1204,137 @@ function debugLog(...args) {
   }
 
   // Add XMLHttpRequest interception for cart updates
-  const originalXHROpen = XMLHttpRequest.prototype.open;
-  const originalXHRSend = XMLHttpRequest.prototype.send;
+  // Add XMLHttpRequest interception for cart updates
+const originalXHROpen = XMLHttpRequest.prototype.open;
+const originalXHRSend = XMLHttpRequest.prototype.send;
 
-  XMLHttpRequest.prototype.open = function(method, url) {
-    this._orderLimitUrl = url;
-    originalXHROpen.apply(this, arguments);
-  };
+XMLHttpRequest.prototype.open = function(method, url) {
+  this._orderLimitUrl = url;
+  originalXHROpen.apply(this, arguments);
+};
 
-  XMLHttpRequest.prototype.send = function(body) {
-    // Check if this is a cart/add request
-    if (typeof this._orderLimitUrl === 'string' && this._orderLimitUrl.includes('/cart/add')) {
-      debugLog('Intercepted XHR cart/add request');
+XMLHttpRequest.prototype.send = function(body) {
+  // Check if this is a cart-related request (add, update, change, clear)
+  if (typeof this._orderLimitUrl === 'string' && 
+      (this._orderLimitUrl.includes('/cart/add') || 
+       this._orderLimitUrl.includes('/cart/update') ||
+       this._orderLimitUrl.includes('/cart/change') ||
+       this._orderLimitUrl.includes('/cart/clear'))) {
+    debugLog(`Intercepted XHR cart request: ${this._orderLimitUrl}`);
+    
+    // Immediately disable checkout buttons BEFORE the request completes
+    immediatelyDisableCheckoutButtons();
 
-      try {
-        // Add readystatechange handler to check results after request completes
-        this.addEventListener('readystatechange', function() {
-          if (this.readyState === 4) {
-            debugLog('XHR request completed, updating checkout state');
-            requestAnimationFrame(() => {
-              checkCurrentCart().then(() => updateCheckoutButtonsState());
-            });
-          }
-        });
-      } catch (error) {
-        console.error('Error setting up XHR interceptor:', error);
-      }
-    }
-    // Handle cart/change requests
-    else if (typeof this._orderLimitUrl === 'string' && this._orderLimitUrl.includes('/cart/change')) {
-      debugLog('Intercepted XHR cart/change request');
-
-      try {
-        // Add readystatechange handler to check results after request completes
-        this.addEventListener('readystatechange', function() {
-          if (this.readyState === 4) {
-            debugLog('XHR cart/change completed, updating checkout state');
-            requestAnimationFrame(() => {
-              checkCurrentCart().then(() => updateCheckoutButtonsState());
-            });
-          }
-        });
-      } catch (error) {
-        console.error('Error setting up XHR cart/change interceptor:', error);
-      }
-    }
-
-    originalXHRSend.apply(this, arguments);
-  };
-
-  async function initializeValidation() {
-    const productId = getProductId();
-    if (!productId) {
-      debugLog('Not on a product page or could not determine product ID');
-      // Re-enable any initially disabled buttons
-      document.querySelectorAll('[data-limit-preemptive-disabled="true"]').forEach(button => {
-        button.disabled = false;
-        button.style.opacity = '';
-        button.style.pointerEvents = '';
-        button.removeAttribute('data-limit-preemptive-disabled');
+    try {
+      // Add readystatechange handler to update buttons after request completes
+      this.addEventListener('readystatechange', function() {
+        if (this.readyState === 4) {
+          debugLog('XHR request completed, refreshing validation');
+          // Use setTimeout to ensure this runs after any immediate DOM updates
+          setTimeout(() => {
+            checkCurrentCart().then(() => updateCheckoutButtonsState());
+          }, 100);
+        }
       });
-      return;
+    } catch (error) {
+      console.error('Error setting up XHR interceptor:', error);
     }
+  }
+
+  originalXHRSend.apply(this, arguments);
+};
+
+// Add fetch interception for cart updates
+const originalFetchForCart = window.fetch;
+window.fetch = function(...args) {
+  const [url, options] = args;
+  if (typeof url === 'string' && 
+      (url.includes('/cart/add') || 
+       url.includes('/cart/update') ||
+       url.includes('/cart/change') ||
+       url.includes('/cart/clear'))) {
+    debugLog(`Intercepted fetch cart request: ${url}`);
+    
+    // Immediately disable checkout buttons BEFORE the request completes
+    immediatelyDisableCheckoutButtons();
+
+    // Call original fetch but handle the response
+    return originalFetchForCart.apply(this, args)
+      .then(response => {
+        // Schedule validation to run after fetch completes
+        setTimeout(() => {
+          checkCurrentCart().then(() => updateCheckoutButtonsState());
+        }, 100);
+        return response;
+      });
+  }
+  return originalFetchForCart.apply(this, args);
+};
+
+// Setup observers for quantity inputs to immediately disable checkout on changes
+function setupQuantityInputObservers() {
+  // Find quantity inputs on product page
+  const quantityInputs = document.querySelectorAll('input[name="quantity"], [aria-label="Quantity"], .quantity-input, .quantity-selector, .js-qty__input');
   
-    // Start both operations in parallel - this is the key optimization
+  for (const input of quantityInputs) {
+    ['change', 'input', 'keyup', 'mouseup'].forEach(event => {
+      input.addEventListener(event, () => {
+        // Immediately disable checkout buttons on ANY quantity change
+        debugLog('Quantity input changed, immediately disabling checkout');
+        immediatelyDisableCheckoutButtons();
+        
+        // Schedule validation after a short delay to let the DOM update
+        setTimeout(() => {
+          checkCurrentCart().then(() => updateCheckoutButtonsState());
+        }, 100);
+      });
+    });
+  }
+  
+  // Also find all quantity adjustment buttons (+/- controls)
+  const quantityButtons = document.querySelectorAll('.quantity-adjust, .js-qty__adjust, .quantity-button, [data-action="increase-quantity"], [data-action="decrease-quantity"]');
+  
+  for (const button of quantityButtons) {
+    button.addEventListener('click', () => {
+      // Immediately disable checkout buttons on ANY quantity change
+      debugLog('Quantity button clicked, immediately disabling checkout');
+      immediatelyDisableCheckoutButtons();
+      
+      // Schedule validation after a short delay to let the DOM update
+      setTimeout(() => {
+        checkCurrentCart().then(() => updateCheckoutButtonsState());
+      }, 100);
+    });
+  }
+  
+  debugLog(`Set up observers on ${quantityInputs.length} quantity inputs and ${quantityButtons.length} quantity buttons`);
+}
+
+
+async function initializeValidation() {
+  const productId = getProductId();
+  if (!productId) {
+    debugLog('Not on a product page or could not determine product ID');
+    // Re-enable any initially disabled buttons
+    document.querySelectorAll('[data-limit-preemptive-disabled="true"]').forEach(button => {
+      button.disabled = false;
+      button.style.opacity = '';
+      button.style.pointerEvents = '';
+      button.removeAttribute('data-limit-preemptive-disabled');
+    });
+    return;
+  }
+
+  // Start by immediately disabling all checkout buttons
+  const buttons = immediatelyDisableCheckoutButtons();
+  buttons.forEach(button => {
+    button.classList.add('limit-initial-disabled');
+  });
+  
+  debugLog(`Initially disabled ${buttons.length} checkout buttons while validating`);
+
+  try {
+    // Start both operations in parallel - this is key for optimization
     const cartPromise = checkCurrentCart();
     const limitsPromise = fetchOrderLimits(productId);
   
@@ -1153,118 +1350,221 @@ function debugLog(...args) {
     }
   
     // Now update checkout buttons state based on actual data
-    updateCheckoutButtonsState();
+    await updateCheckoutButtonsState();
   
-    // Set up additional observers
+    // Set up additional observers for cart updates and dynamic checkout buttons
+    setupCartUpdateObserver();
+    setupCheckoutButtonObserver();
+    
+    // Add quantity input change interceptors
+    setupQuantityInputObservers();
+    
+    // Special setup for cart page
     const onCartPage = window.location.pathname.includes('/cart');
     if (onCartPage) {
       setupCartPageInterception();
     }
   
-    setupCartUpdateObserver();
-    setupCheckoutButtonObserver();
-  
-    debugLog('Order limit validation initialized for product', productId);
-  }  
+    debugLog('Order limit validation fully initialized for product', productId);
+  } catch (error) {
+    console.error('Error during validation initialization:', error);
+    // In case of error, keep buttons disabled as a safety measure
+  }
+
+  setupSafetyChecks();
+
+}
 
 
   // ADD this new function
   function setupCartUpdateObserver() {
     const cartObserver = new MutationObserver(mutations => {
       let cartUpdated = false;
-
-      mutations.forEach(mutation => {
-        if (mutation.type === 'childList' && mutation.addedNodes.length) {
-          // Check if cart content might have changed
+  
+      // Check if any mutation potentially affects the cart
+      for (const mutation of mutations) {
+        // If any DOM change occurs, immediately disable checkout
+        if (mutation.type === 'childList') {
+          // If new nodes were added
           for (const node of mutation.addedNodes) {
-            if (node.nodeType === 1) { // Element node
-              if (
-                node.classList && (
-                  node.classList.contains('cart__item') ||
-                  node.classList.contains('cart-item') ||
-                  node.classList.contains('cart__row')
-                ) ||
-                node.querySelector && (
-                  node.querySelector('.cart__item, .cart-item, .cart__row')
-                )
-              ) {
+            if (node.nodeType === 1) { // If it's an element
+              cartUpdated = true;
+              break;
+            }
+          }
+          // If nodes were removed (item removed from cart)
+          if (!cartUpdated && mutation.removedNodes.length > 0) {
+            for (const node of mutation.removedNodes) {
+              if (node.nodeType === 1) { // If it's an element
                 cartUpdated = true;
                 break;
               }
             }
           }
         } else if (mutation.type === 'attributes') {
-          // If quantity attributes change
-          if (mutation.attributeName === 'value' &&
-            mutation.target.name &&
-            mutation.target.name.includes('quantity')) {
+          // If an attribute changed on a quantity input or other relevant element
+          if (
+            mutation.target.name && 
+            (mutation.target.name.includes('quantity') || 
+             mutation.target.name.includes('updates')) ||
+            mutation.target.classList && 
+            (mutation.target.classList.contains('quantity-input') ||
+             mutation.target.classList.contains('js-qty__input'))
+          ) {
             cartUpdated = true;
           }
         }
-      });
-
+        
+        if (cartUpdated) break;
+      }
+  
       if (cartUpdated) {
-        debugLog('Cart content changed, updating checkout buttons');
-        requestAnimationFrame(() => updateCheckoutButtonsState());
+        debugLog('Cart content changed, immediately disabling checkout');
+        // Immediately disable checkout buttons
+        immediatelyDisableCheckoutButtons();
+        
+        // Then schedule a validation after a short delay
+        setTimeout(() => {
+          checkCurrentCart().then(() => updateCheckoutButtonsState());
+        }, 150); // Slightly longer delay to ensure DOM is fully updated
       }
     });
-
-    // Start observing the cart container
-    const cartContainers = document.querySelectorAll('.cart, #cart, [data-section-type="cart"], form[action="/cart"]');
-    cartContainers.forEach(container => {
-      if (container) {
-        cartObserver.observe(container, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          characterData: false
-        });
-        debugLog('Observing cart container for changes:', container);
-      }
-    });
+  
+    // Observe the entire cart section with all options
+    const cartContainers = [
+      '.cart', 
+      '#cart', 
+      '[data-section-type="cart"]', 
+      'form[action="/cart"]',
+      '.cart__items',
+      '.cart-items',
+      '.cart-wrapper'
+    ];
+    
+    for (const selector of cartContainers) {
+      const containers = document.querySelectorAll(selector);
+      containers.forEach(container => {
+        if (container) {
+          cartObserver.observe(container, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            characterData: true
+          });
+        }
+      });
+    }
+    
+    // If we couldn't find any specific container, observe the body as fallback
+    if (document.querySelectorAll(cartContainers.join(',')).length === 0) {
+      debugLog('No cart container found, observing body as fallback');
+      cartObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true
+      });
+    }
+    
+    debugLog('Cart observer set up');
   }
-
+  
   // ADD this new function
   function setupCheckoutButtonObserver() {
     const checkoutObserver = new MutationObserver(mutations => {
-      mutations.forEach(mutation => {
+      let checkoutButtonsAdded = false;
+      let dynamicButtonsContainer = null;
+      
+      // Look for added checkout buttons or their containers
+      for (const mutation of mutations) {
         if (mutation.type === 'childList' && mutation.addedNodes.length) {
-          // Check if any new checkout buttons were added
-          let checkoutButtonAdded = false;
-
           for (const node of mutation.addedNodes) {
-            if (node.nodeType === 1) { // Element node
-              if (
-                (node.name === 'checkout' || node.getAttribute('name') === 'checkout') ||
-                (node.href && node.href.includes('/checkout')) ||
-                (node.classList && (
-                  node.classList.contains('checkout-button') ||
-                  node.classList.contains('cart__submit')
-                )) ||
-                (node.querySelector && node.querySelector('button[name="checkout"], input[name="checkout"]'))
-              ) {
-                checkoutButtonAdded = true;
+            if (node.nodeType !== 1) continue; // Skip non-element nodes
+            
+            // Check if this is a checkout button or contains one
+            if (
+              (node.name === 'checkout' || node.getAttribute && node.getAttribute('name') === 'checkout') ||
+              (node.tagName === 'BUTTON' && node.textContent && node.textContent.toLowerCase().includes('checkout')) ||
+              (node.href && node.href.includes('/checkout')) ||
+              (node.classList && (
+                node.classList.contains('checkout-button') ||
+                node.classList.contains('cart__submit') ||
+                node.classList.contains('shopify-payment-button')
+              ))
+            ) {
+              checkoutButtonsAdded = true;
+              break;
+            }
+            
+            // Check if this is a container that might have checkout buttons
+            if (node.classList && (
+              node.classList.contains('shopify-payment-button') ||
+              node.classList.contains('additional-checkout-buttons') ||
+              node.classList.contains('cart__submit-controls')
+            )) {
+              dynamicButtonsContainer = node;
+            }
+            
+            // Check if this element contains any checkout buttons
+            if (node.querySelector) {
+              const containsCheckoutButton = node.querySelector(
+                'button[name="checkout"], input[name="checkout"], .shopify-payment-button__button, ' +
+                'a[href="/checkout"], .cart__checkout, #checkout, .checkout-button'
+              );
+              
+              if (containsCheckoutButton) {
+                checkoutButtonsAdded = true;
                 break;
               }
             }
           }
-
-          if (checkoutButtonAdded) {
-            debugLog('New checkout button detected, updating state');
-            requestAnimationFrame(() => updateCheckoutButtonsState());
-          }
+          
+          if (checkoutButtonsAdded) break;
         }
-      });
+      }
+  
+      if (checkoutButtonsAdded || dynamicButtonsContainer) {
+        debugLog('New checkout buttons detected, immediately disabling them');
+        
+        // If we found new buttons, immediately disable them
+        immediatelyDisableCheckoutButtons();
+        
+        // Then re-run button state update based on current validation
+        setTimeout(() => {
+          updateCheckoutButtonsState();
+        }, 50);
+        
+        // If we found a dynamic container that might add buttons later,
+        // observe it separately with higher priority
+        if (dynamicButtonsContainer) {
+          const dynamicObserver = new MutationObserver(() => {
+            debugLog('Change in dynamic checkout button container');
+            immediatelyDisableCheckoutButtons();
+            
+            // Update state after a short delay
+            setTimeout(() => updateCheckoutButtonsState(), 50);
+          });
+          
+          dynamicObserver.observe(dynamicButtonsContainer, {
+            childList: true,
+            subtree: true,
+            attributes: false
+          });
+          
+          debugLog('Set up specialized observer for dynamic checkout buttons container');
+        }
+      }
     });
-
+  
     // Observe the whole document for new checkout buttons
     checkoutObserver.observe(document.body, {
       childList: true,
       subtree: true
     });
-    debugLog('Observing document for new checkout buttons');
+    
+    debugLog('Checkout button observer set up');
   }
-
+  
 
   if (document.readyState === 'loading') {
     // Start immediately but also ensure it runs after content loads
@@ -1276,4 +1576,157 @@ function debugLog(...args) {
   } else {
     initializeValidation();
   }
+
+  // Re-validate on page show (when coming back to the page)
+  window.addEventListener('pageshow', (event) => {
+    // If the page is loaded from cache (back button), re-validate
+    if (event.persisted) {
+      debugLog('Page loaded from cache, re-validating');
+      immediatelyDisableCheckoutButtons();
+      checkCurrentCart().then(() => updateCheckoutButtonsState());
+    }
+  });
+  
+  // Re-validate on visibility change (tab becomes visible again)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      debugLog('Page became visible, re-validating');
+      immediatelyDisableCheckoutButtons();
+      checkCurrentCart().then(() => updateCheckoutButtonsState());
+    }
+  });
+  
+  // Catch any form submissions to /cart/add
+  document.addEventListener('submit', (event) => {
+    const form = event.target;
+    if (form && form.action && form.action.includes('/cart/add')) {
+      debugLog('Intercepted form submission to /cart/add');
+      immediatelyDisableCheckoutButtons();
+      // Let the form submission happen, but ensure validation happens after
+      setTimeout(() => {
+        checkCurrentCart().then(() => updateCheckoutButtonsState());
+      }, 100);
+    }
+  });
 })();
+
+
+// Set up a recurring safety check to catch any edge cases
+// Set up a recurring safety check to catch any edge cases
+// Set up a recurring safety check to catch any edge cases
+function setupSafetyChecks() {
+  // Store interval ID so we can clear it if needed
+  let safetyInterval = null;
+  
+  // Perform an immediate check with proper scope handling
+  const safetyCheck = () => {
+    // First, verify that we're in a properly initialized state
+    try {
+      // Check if productLimits variable exists in the global scope
+      if (typeof productLimits === 'undefined' || productLimits === null) {
+        debugLog('Safety check: productLimits not available yet, skipping check');
+        return;
+      }
+      
+      // Verify that we have a product ID to work with
+      const currentProductId = getProductId();
+      if (!currentProductId) {
+        debugLog('Safety check: No product ID available, skipping check');
+        return;
+      }
+      
+      // Verify all checkout buttons have correct state
+      const checkoutButtons = findCheckoutButtons();
+      if (!checkoutButtons || checkoutButtons.length === 0) {
+        // No checkout buttons found, nothing to check
+        return;
+      }
+      
+      // Try to get current validation status - use try/catch in case validateTotalQuantity fails
+      let validationResult;
+      try {
+        validationResult = validateTotalQuantity(0, productLimits);
+      } catch (validationError) {
+        console.error('Error in validation during safety check:', validationError);
+        // If validation fails, disable buttons as a precaution
+        checkoutButtons.forEach(button => {
+          if (!button.disabled) {
+            button.disabled = true;
+            button.style.opacity = '0.5';
+            button.style.pointerEvents = 'none';
+          }
+        });
+        return;
+      }
+      
+      // If validation succeeded but shows limits are not met, ensure buttons are disabled
+      if (validationResult && !validationResult.withinLimits) {
+        let foundEnabledButtons = false;
+        
+        checkoutButtons.forEach(button => {
+          if (!button.disabled) {
+            debugLog('Safety check: Found enabled checkout button when it should be disabled');
+            foundEnabledButtons = true;
+            
+            // Disable it immediately
+            button.disabled = true;
+            button.style.opacity = '0.5';
+            button.style.pointerEvents = 'none';
+            button.style.cursor = 'not-allowed';
+            button.classList.add('limit-disabled');
+          }
+        });
+        
+        if (foundEnabledButtons) {
+          // Re-run full validation if we found any enabled buttons that should be disabled
+          try {
+            requestAnimationFrame(() => {
+              checkCurrentCart().then(() => updateCheckoutButtonsState());
+            });
+          } catch (refreshError) {
+            console.error('Error refreshing validation:', refreshError);
+          }
+        }
+      }
+    } catch (error) {
+      // Add error handling to prevent any crashes in the safety check
+      console.error('Unexpected error in safety check:', error);
+      
+      // If we get repeated errors, eventually clear the interval
+      if (window.safetyCheckErrorCount === undefined) {
+        window.safetyCheckErrorCount = 1;
+      } else {
+        window.safetyCheckErrorCount++;
+      }
+      
+      // If we've had too many errors, stop the safety checks
+      if (window.safetyCheckErrorCount > 10 && safetyInterval) {
+        clearInterval(safetyInterval);
+        console.warn('Disabled safety checks due to repeated errors');
+      }
+    }
+  };
+  
+  // Start the safety checks with a safeguard delay - give initialization time to complete
+  setTimeout(() => {
+    safetyInterval = setInterval(safetyCheck, 1000);
+    debugLog('Safety check interval started');
+  }, 2000);
+  
+  // Also run it on visibility changes (tab becomes visible)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Wait a short moment to ensure everything is loaded
+      setTimeout(safetyCheck, 200);
+    }
+  });
+  
+  // Run it on scroll end (user might scroll to checkout buttons)
+  let scrollTimer;
+  window.addEventListener('scroll', () => {
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(safetyCheck, 200);
+  });
+  
+  debugLog('Safety check system initialized');
+}
