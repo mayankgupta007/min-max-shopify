@@ -1027,13 +1027,15 @@ function disableCheckoutButtons(buttons, message) {
   // Function to update all checkout buttons based on current cart state
   async function updateCheckoutButtonsState() {
     // Don't re-check cart if this is the initial page load validation
-    await checkCurrentCart(); // Always check cart for accurate state
-    
-    // Remove the initial disabled class since we're processing for real now
-    document.querySelectorAll('.limit-initial-disabled').forEach(button => {
-      button.classList.remove('limit-initial-disabled');
-    });
-    
+    if (!document.querySelector('.limit-initial-disabled')) {
+      await checkCurrentCart();
+    } else {
+      // Remove the initial disabled class since we're processing for real now
+      document.querySelectorAll('.limit-initial-disabled').forEach(button => {
+        button.classList.remove('limit-initial-disabled');
+      });
+    }
+  
     // Record time of this update
     const now = Date.now();
     if (now - lastButtonStateUpdate < BUTTON_UPDATE_COOLDOWN) {
@@ -1052,31 +1054,84 @@ function disableCheckoutButtons(buttons, message) {
     
     try {
       if (!productLimits) {
-        // If we don't have limits, give users the benefit of the doubt and enable buttons
-        debugLog('No product limits available, enabling checkout for usability');
-        enableAllCheckoutButtons();
+        // If we don't have limits, keep buttons disabled as a safety measure
+        debugLog('No product limits available, keeping checkout disabled for safety');
         return;
       }
-    
+  
       // Validate the current quantity against limits
       const validationResult = validateTotalQuantity(0, productLimits);
-      debugLog('Validation result in updateCheckoutButtonsState:', validationResult);
-    
+      debugLog('Button state update validation result:', validationResult);
+  
       // Find all checkout buttons
       const checkoutButtons = findCheckoutButtons();
       debugLog(`Found ${checkoutButtons.length} checkout buttons for state update`);
-    
+  
       if (!validationResult.withinLimits) {
         // Limits not met, ensure buttons stay disabled
-        disableCheckoutButtons(checkoutButtons, validationResult.message);
+        checkoutButtons.forEach(button => {
+          // Save original state if we haven't already
+          if (!button.hasAttribute('data-original-disabled')) {
+            button.setAttribute('data-original-disabled', button.disabled || false);
+            button.setAttribute('data-original-opacity', button.style.opacity || '');
+            button.setAttribute('data-original-pointer-events', button.style.pointerEvents || '');
+            button.setAttribute('data-original-cursor', button.style.cursor || '');
+          }
+  
+          // Keep button disabled
+          button.disabled = true;
+          button.style.opacity = '0.5';
+          button.style.pointerEvents = 'none';
+          button.style.cursor = 'not-allowed';
+          button.classList.add('limit-disabled');
+  
+          // Add warning to innerHTML if possible
+          if (!button.querySelector('.limit-warning-text')) {
+            try {
+              const warningSpan = document.createElement('span');
+              warningSpan.className = 'limit-warning-text';
+              warningSpan.style.marginLeft = '5px';
+              warningSpan.style.fontSize = '80%';
+              warningSpan.innerHTML = '⚠️';
+              button.appendChild(warningSpan);
+            } catch (e) {
+              // Ignore errors adding warning text
+            }
+          }
+        });
+  
+        // Show warning message
+        showLimitWarning(validationResult.message);
       } else {
         // Limits met, restore buttons to original state
-        enableCheckoutButtons(checkoutButtons);
+        checkoutButtons.forEach(button => {
+          // Always restore all buttons when validation passes
+          button.disabled = false;
+          button.style.opacity = '';
+          button.style.pointerEvents = '';
+          button.style.cursor = '';
+          button.classList.remove('limit-disabled');
+          
+          // Remove warning text if it exists
+          const warningText = button.querySelector('.limit-warning-text');
+          if (warningText) {
+            button.removeChild(warningText);
+          }
+  
+          // Remove data attributes to clean up
+          button.removeAttribute('data-original-disabled');
+          button.removeAttribute('data-original-opacity');
+          button.removeAttribute('data-original-pointer-events');
+          button.removeAttribute('data-original-cursor');
+          button.removeAttribute('data-limit-preemptive-disabled');
+        });
+  
+        // Clear warning
+        clearLimitWarning();
       }
     } catch (error) {
       console.error('Error updating checkout button state:', error);
-      // In case of error, default to enabling buttons for better user experience
-      enableAllCheckoutButtons();
+      // In case of error, ensure buttons stay disabled as a safety measure
     } finally {
       // Mark validation as complete
       validationInProgress = false;
@@ -1325,7 +1380,12 @@ async function initializeValidation() {
   if (!productId) {
     debugLog('Not on a product page or could not determine product ID');
     // Re-enable any initially disabled buttons
-    enableAllCheckoutButtons();
+    document.querySelectorAll('[data-limit-preemptive-disabled="true"]').forEach(button => {
+      button.disabled = false;
+      button.style.opacity = '';
+      button.style.pointerEvents = '';
+      button.removeAttribute('data-limit-preemptive-disabled');
+    });
     return;
   }
 
@@ -1345,22 +1405,35 @@ async function initializeValidation() {
     // Wait for both operations to complete in parallel
     const [_, limits] = await Promise.all([cartPromise, limitsPromise]);
     
-    debugLog('Completed parallel operations - cart check and limits fetch:', limits);
+    productLimits = limits;
     
-    // Force a 100ms delay to ensure DOM updates have completed
-    await new Promise(resolve => setTimeout(resolve, 100));
+    if (!limits) {
+      debugLog('No limits could be retrieved, keeping checkout disabled for safety');
+      // Keep checkout buttons disabled as a safety measure
+      return;
+    }
     
+    debugLog('Limits retrieved:', limits, 'Current cart quantity:', currentCartQuantity);
+    
+    // Check if the current quantity is within limits immediately
+    const validationResult = validateTotalQuantity(0, limits);
+    
+    if (validationResult.withinLimits) {
+      debugLog('Initial validation: quantity is within limits, enabling buttons');
+      // Force enable all buttons that were disabled during initialization
+      document.querySelectorAll('.limit-initial-disabled, [data-limit-preemptive-disabled="true"]').forEach(button => {
+        button.disabled = false;
+        button.style.opacity = '';
+        button.style.pointerEvents = '';
+        button.style.cursor = '';
+        button.classList.remove('limit-disabled');
+        button.classList.remove('limit-initial-disabled');
+        button.removeAttribute('data-limit-preemptive-disabled');
+      });
+    }
+  
     // Now update checkout buttons state based on actual data
     await updateCheckoutButtonsState();
-    
-    // Double-check to make sure our update took effect
-    setTimeout(() => {
-      const stillDisabledButtons = document.querySelectorAll('.limit-initial-disabled, .limit-disabled, [data-limit-preemptive-disabled="true"]');
-      if (stillDisabledButtons.length > 0 && (productLimits && currentCartQuantity <= productLimits.maxLimit)) {
-        debugLog('Found buttons still disabled after validation, forcing enable');
-        enableAllCheckoutButtons();
-      }
-    }, 300);
   
     // Set up additional observers for cart updates and dynamic checkout buttons
     setupCartUpdateObserver();
@@ -1378,12 +1451,10 @@ async function initializeValidation() {
     debugLog('Order limit validation fully initialized for product', productId);
   } catch (error) {
     console.error('Error during validation initialization:', error);
-    // In case of error, default to enabling checkout for better UX
-    enableAllCheckoutButtons();
+    // In case of error, keep buttons disabled as a safety measure
   }
 
-  // Set up safety checks with a delay
-  setTimeout(setupSafetyChecks, 1000);
+  setupSafetyChecks();
 }
 
 
@@ -1626,6 +1697,7 @@ async function initializeValidation() {
 // Set up a recurring safety check to catch any edge cases
 // Set up a recurring safety check to catch any edge cases
 function setupSafetyChecks() {
+  // Store interval ID so we can clear it if needed
   let safetyInterval = null;
   let safetyAttempts = 0;
   
@@ -1639,7 +1711,34 @@ function setupSafetyChecks() {
         const stillDisabledButtons = document.querySelectorAll('.limit-initial-disabled, .limit-disabled, [data-limit-preemptive-disabled="true"]');
         if (stillDisabledButtons.length > 0) {
           debugLog(`Safety check: After ${safetyAttempts} attempts, forcing button enable`);
-          enableAllCheckoutButtons();
+          
+          // Instead of calling enableAllCheckoutButtons (which doesn't exist), 
+          // enable the buttons directly using existing code:
+          stillDisabledButtons.forEach(button => {
+            button.disabled = false;
+            button.style.opacity = '';
+            button.style.pointerEvents = '';
+            button.style.cursor = '';
+            button.classList.remove('limit-disabled');
+            button.classList.remove('limit-initial-disabled');
+            button.removeAttribute('data-limit-preemptive-disabled');
+            button.removeAttribute('data-original-disabled');
+            button.removeAttribute('data-original-opacity');
+            button.removeAttribute('data-original-pointer-events');
+            button.removeAttribute('data-original-cursor');
+            
+            // Remove warning text if it exists
+            const warningText = button.querySelector('.limit-warning-text');
+            if (warningText) {
+              button.removeChild(warningText);
+            }
+          });
+          
+          // Clear any warning messages
+          const warningContainer = document.querySelector('.order-limit-warning');
+          if (warningContainer) {
+            warningContainer.style.display = 'none';
+          }
         }
       }
       
@@ -1673,16 +1772,25 @@ function setupSafetyChecks() {
         
         checkoutButtons.forEach(button => {
           if (button.disabled || button.classList.contains('limit-disabled') || 
-              button.classList.contains('limit-initial-disabled')) {
+              button.classList.contains('limit-initial-disabled') ||
+              button.hasAttribute('data-limit-preemptive-disabled')) {
             debugLog('Safety check: Found disabled checkout button when it should be enabled');
             foundDisabledButtons = true;
+            
+            // Enable the button directly
+            button.disabled = false;
+            button.style.opacity = '';
+            button.style.pointerEvents = '';
+            button.style.cursor = '';
+            button.classList.remove('limit-disabled');
+            button.classList.remove('limit-initial-disabled');
+            button.removeAttribute('data-limit-preemptive-disabled');
+            button.removeAttribute('data-original-disabled');
+            button.removeAttribute('data-original-opacity');
+            button.removeAttribute('data-original-pointer-events');
+            button.removeAttribute('data-original-cursor');
           }
         });
-        
-        if (foundDisabledButtons) {
-          debugLog('Safety check: Enabling buttons that should be enabled');
-          enableCheckoutButtons(checkoutButtons);
-        }
       }
     } catch (error) {
       console.error('Unexpected error in safety check:', error);
@@ -1696,8 +1804,10 @@ function setupSafetyChecks() {
   };
   
   // Start the safety checks with a safeguard delay
-  debugLog('Setting up safety check interval');
-  safetyInterval = setInterval(safetyCheck, 1000);
+  setTimeout(() => {
+    safetyInterval = setInterval(safetyCheck, 1000);
+    debugLog('Safety check interval started');
+  }, 2000);
   
   // Also run it on visibility changes
   document.addEventListener('visibilitychange', () => {
