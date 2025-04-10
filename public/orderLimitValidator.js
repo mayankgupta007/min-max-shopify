@@ -1706,14 +1706,32 @@ function setupSafetyChecks() {
     safetyAttempts++;
     
     try {
-      // If we've done many attempts and buttons are still disabled, force enable
-      if (safetyAttempts > 5) {
-        const stillDisabledButtons = document.querySelectorAll('.limit-initial-disabled, .limit-disabled, [data-limit-preemptive-disabled="true"]');
-        if (stillDisabledButtons.length > 0) {
-          debugLog(`Safety check: After ${safetyAttempts} attempts, forcing button enable`);
+      // First, check if productLimits is available before attempting any action
+      if (typeof productLimits === 'undefined' || productLimits === null) {
+        debugLog('Safety check: productLimits not available yet, skipping check');
+        return;
+      }
+      
+      // Get current product ID
+      const currentProductId = getProductId();
+      if (!currentProductId) {
+        debugLog('Safety check: No product ID available, skipping check');
+        return;
+      }
+      
+      // Always check current validation before forcing any button state changes
+      const validationResult = validateTotalQuantity(0, productLimits);
+      debugLog('Safety check validation result:', validationResult);
+      
+      // Find disabled buttons
+      const stillDisabledButtons = document.querySelectorAll('.limit-initial-disabled, .limit-disabled, [data-limit-preemptive-disabled="true"]');
+      
+      // Only after many attempts and ONLY if validation passes, enable buttons
+      if (safetyAttempts > 5 && stillDisabledButtons.length > 0) {
+        // THE KEY FIX: Only enable buttons if validation passes
+        if (validationResult && validationResult.withinLimits) {
+          debugLog(`Safety check: After ${safetyAttempts} attempts, enabling buttons - validation passed`);
           
-          // Instead of calling enableAllCheckoutButtons (which doesn't exist), 
-          // enable the buttons directly using existing code:
           stillDisabledButtons.forEach(button => {
             button.disabled = false;
             button.style.opacity = '';
@@ -1739,58 +1757,27 @@ function setupSafetyChecks() {
           if (warningContainer) {
             warningContainer.style.display = 'none';
           }
+        } else {
+          // If validation fails, log this fact and KEEP buttons disabled
+          debugLog(`Safety check: After ${safetyAttempts} attempts, keeping buttons disabled - validation failed (${validationResult ? 'min: ' + validationResult.minLimit + ', current: ' + validationResult.totalQuantity : 'no validation result'})`);
         }
       }
       
-      // Check if productLimits variable exists in the global scope
-      if (typeof productLimits === 'undefined' || productLimits === null) {
-        debugLog('Safety check: productLimits not available yet, skipping check');
-        return;
-      }
-      
-      // Verify that we have a product ID to work with
-      const currentProductId = getProductId();
-      if (!currentProductId) {
-        debugLog('Safety check: No product ID available, skipping check');
-        return;
-      }
-      
-      // Verify all checkout buttons have correct state
-      const checkoutButtons = findCheckoutButtons();
-      if (!checkoutButtons || checkoutButtons.length === 0) {
-        // No checkout buttons found, nothing to check
-        return;
-      }
-      
-      // Try to get current validation status
-      const validationResult = validateTotalQuantity(0, productLimits);
-      debugLog('Safety check validation result:', validationResult);
-      
-      // If validation shows limits are met but buttons are disabled, enable them
-      if (validationResult && validationResult.withinLimits) {
-        let foundDisabledButtons = false;
+      // If validation shows limits are not met, ensure buttons stay disabled
+      if (validationResult && !validationResult.withinLimits) {
+        const checkoutButtons = findCheckoutButtons();
+        let needToDisable = false;
         
         checkoutButtons.forEach(button => {
-          if (button.disabled || button.classList.contains('limit-disabled') || 
-              button.classList.contains('limit-initial-disabled') ||
-              button.hasAttribute('data-limit-preemptive-disabled')) {
-            debugLog('Safety check: Found disabled checkout button when it should be enabled');
-            foundDisabledButtons = true;
-            
-            // Enable the button directly
-            button.disabled = false;
-            button.style.opacity = '';
-            button.style.pointerEvents = '';
-            button.style.cursor = '';
-            button.classList.remove('limit-disabled');
-            button.classList.remove('limit-initial-disabled');
-            button.removeAttribute('data-limit-preemptive-disabled');
-            button.removeAttribute('data-original-disabled');
-            button.removeAttribute('data-original-opacity');
-            button.removeAttribute('data-original-pointer-events');
-            button.removeAttribute('data-original-cursor');
+          if (!button.disabled) {
+            needToDisable = true;
           }
         });
+        
+        if (needToDisable) {
+          debugLog('Safety check: Found enabled checkout buttons when they should be disabled, re-disabling');
+          updateCheckoutButtonsState(); // Re-run full update to disable properly
+        }
       }
     } catch (error) {
       console.error('Unexpected error in safety check:', error);
