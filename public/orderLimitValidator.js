@@ -1,3 +1,17 @@
+// Immediate preemptive button disabling - executed synchronously
+(function() {
+  // Find and disable all potential checkout buttons immediately
+  const selectors = ['button[name="checkout"]', 'input[name="checkout"]', '.shopify-payment-button__button', '.cart__checkout', '#checkout', '.checkout-button'];
+  selectors.forEach(selector => {
+    document.querySelectorAll(selector).forEach(button => {
+      button.disabled = true;
+      button.style.opacity = '0.5';
+      button.style.pointerEvents = 'none';
+      button.setAttribute('data-limit-preemptive-disabled', 'true');
+    });
+  });
+})();
+
 const DEBUG_MODE = false;
 
 // Replace all debugLog calls with this function
@@ -1130,53 +1144,44 @@ function debugLog(...args) {
     if (!productId) {
       debugLog('Not on a product page or could not determine product ID');
       // Re-enable any initially disabled buttons
-      document.querySelectorAll('.limit-initial-disabled').forEach(button => {
-        button.classList.remove('limit-initial-disabled');
+      document.querySelectorAll('[data-limit-preemptive-disabled="true"]').forEach(button => {
         button.disabled = false;
         button.style.opacity = '';
-        button.style.cursor = '';
         button.style.pointerEvents = '';
+        button.removeAttribute('data-limit-preemptive-disabled');
       });
       return;
     }
-
-    // Start both operations in parallel
+  
+    // Start both operations in parallel - this is the key optimization
     const cartPromise = checkCurrentCart();
     const limitsPromise = fetchOrderLimits(productId);
-
-    // Wait for both operations to complete
+  
+    // Wait for both operations to complete in parallel
     const [_, limits] = await Promise.all([cartPromise, limitsPromise]);
+    
     productLimits = limits;
-
+  
     if (!limits) {
-      debugLog('No limits could be retrieved for this product');
-      // Re-enable any initially disabled buttons
-      document.querySelectorAll('.limit-initial-disabled').forEach(button => {
-        button.classList.remove('limit-initial-disabled');
-        button.disabled = false;
-        button.style.opacity = '';
-        button.style.cursor = '';
-        button.style.pointerEvents = '';
-      });
+      debugLog('No limits could be retrieved, keeping checkout disabled for safety');
+      // Keep checkout buttons disabled as a safety measure
       return;
     }
-
-    // Now update checkout buttons state
+  
+    // Now update checkout buttons state based on actual data
     updateCheckoutButtonsState();
-
-    // Check if we're on a cart page
+  
+    // Set up additional observers
     const onCartPage = window.location.pathname.includes('/cart');
     if (onCartPage) {
-      debugLog('On cart page, setting up additional interception');
       setupCartPageInterception();
     }
-
-    // These can happen after the initial validation is complete
+  
     setupCartUpdateObserver();
     setupCheckoutButtonObserver();
-
+  
     debugLog('Order limit validation initialized for product', productId);
-  }
+  }  
 
 
   // ADD this new function
@@ -1277,14 +1282,14 @@ function debugLog(...args) {
   }
 
 
-if (document.readyState === 'loading') {
-  // Start immediately but also ensure it runs after content loads
-  initializeValidation();
-  document.addEventListener('DOMContentLoaded', function() {
-    // Make sure all buttons are found and properly set up
-    updateCheckoutButtonsState();
-  });
-} else {
-  initializeValidation();
-}
+  if (document.readyState === 'loading') {
+    // Start immediately but also ensure it runs after content loads
+    initializeValidation();
+    document.addEventListener('DOMContentLoaded', function() {
+      // Make sure all buttons are found and properly set up
+      updateCheckoutButtonsState();
+    });
+  } else {
+    initializeValidation();
+  }
 })();
