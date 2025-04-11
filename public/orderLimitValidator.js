@@ -1943,22 +1943,123 @@ async function initializeValidation() {
 // Replace the existing setupSafetyChecks function with this version
 // Set up a recurring safety check to catch any edge cases
 // Replace the existing setupSafetyChecks function with this optimized version
+// Replace the existing setupSafetyChecks function with this optimized version
 function setupSafetyChecks() {
-  let safetyInterval = null;
-  let safetyAttempts = 0;
-  let maxSafetyAttempts = 10; 
-  let lastSafetyCheckTime = 0;
-  let lastSafetyCheckState = null; // Track the last check state to avoid redundant operations
-  let checkFrequency = 1000; // Start with 1 second intervals
+  // Track if we need to run safety checks at all
+  const productId = typeof getProductId === 'function' ? getProductId() : null;
+  if (!productId) {
+    debugLog('Safety checks skipped - not on a product page');
+    return; // Exit early if not on a product page
+  }
   
-  // Define a local function to find checkout buttons if the global one isn't available
+  // Cache for validation state to avoid frequent sessionStorage access
+  let cachedValidationState = null;
+  let lastValidationStateCheck = 0;
+  const VALIDATION_CACHE_TTL = 15000; // 15 seconds cache for validation state
+  
+  // Cache for DOM elements to avoid repeated queries
+  let cachedCheckoutButtons = null;
+  let lastButtonCheck = 0;
+  const BUTTON_CACHE_TTL = 5000; // 5 seconds cache for button elements
+  
+  // Track if any relevant state has changed requiring a check
+  let stateChanged = false;
+  
+  // Function to actually perform the safety check
+  const performSafetyCheck = () => {
+    try {
+      const now = Date.now();
+      
+      // Only check validation state if cache is expired
+      if (!cachedValidationState || (now - lastValidationStateCheck > VALIDATION_CACHE_TTL)) {
+        cachedValidationState = getValidationState();
+        lastValidationStateCheck = now;
+        debugLog('Refreshed cached validation state');
+      }
+      
+      // Only find buttons if cache is expired
+      if (!cachedCheckoutButtons || (now - lastButtonCheck > BUTTON_CACHE_TTL)) {
+        const buttonFindFn = typeof findCheckoutButtons === 'function' ? 
+                            findCheckoutButtons : localFindCheckoutButtons;
+        cachedCheckoutButtons = buttonFindFn();
+        lastButtonCheck = now;
+      }
+      
+      // Skip further processing if no buttons or validation state
+      if (!cachedCheckoutButtons || cachedCheckoutButtons.length === 0) {
+        return;
+      }
+      
+      // Main validation logic
+      if (productLimits) {
+        // Use the last validation result if available, otherwise re-validate
+        const validationResult = lastValidationResult || validateTotalQuantity(0, productLimits);
+        
+        // Apply appropriate button state based on validation
+        if (!validationResult.withinLimits) {
+          // Check if any buttons need disabling
+          let needsDisabling = false;
+          cachedCheckoutButtons.forEach(button => {
+            if (!button.disabled || !button.classList.contains('limit-disabled')) {
+              needsDisabling = true;
+            }
+          });
+          
+          if (needsDisabling) {
+            debugLog('Safety check: Disabling checkout buttons');
+            if (typeof disableCheckoutButtons === 'function') {
+              disableCheckoutButtons(cachedCheckoutButtons, validationResult.message);
+            }
+          }
+        } else if (validationResult.withinLimits) {
+          // Check if any buttons need enabling
+          let needsEnabling = false;
+          cachedCheckoutButtons.forEach(button => {
+            if (button.disabled && 
+                (button.classList.contains('limit-disabled') || 
+                 button.hasAttribute('data-limit-preemptive-disabled'))) {
+              needsEnabling = true;
+            }
+          });
+          
+          if (needsEnabling) {
+            debugLog('Safety check: Re-enabling checkout buttons');
+            if (typeof enableCheckoutButtons === 'function') {
+              enableCheckoutButtons(cachedCheckoutButtons);
+            }
+          }
+        }
+      } else if (cachedValidationState && !cachedValidationState.isValid) {
+        // No productLimits but we have saved invalid state, ensure buttons are disabled
+        let needsDisabling = false;
+        cachedCheckoutButtons.forEach(button => {
+          if (!button.disabled || !button.classList.contains('limit-disabled')) {
+            needsDisabling = true;
+          }
+        });
+        
+        if (needsDisabling) {
+          debugLog('Safety check: Disabling buttons based on saved state');
+          if (typeof disableCheckoutButtons === 'function') {
+            disableCheckoutButtons(cachedCheckoutButtons, cachedValidationState.message);
+          }
+        }
+      }
+      
+      // Reset the state changed flag
+      stateChanged = false;
+      
+    } catch (error) {
+      console.error('Unexpected error in safety check:', error);
+    }
+  };
+  
+  // Helper function for finding buttons if the global one isn't available
   const localFindCheckoutButtons = function() {
     const selectors = [
       'button[name="checkout"]', 
       'input[name="checkout"]', 
       '.shopify-payment-button__button', 
-      '.additional-checkout-buttons button',
-      '.additional-checkout-buttons a',
       '.cart__checkout', 
       '#checkout', 
       '.checkout-button',
@@ -1972,215 +2073,152 @@ function setupSafetyChecks() {
         if (found && found.length) {
           buttons = [...buttons, ...found];
         }
-      } catch(e) {
-        // Ignore errors with selectors
-      }
+      } catch(e) { /* Ignore errors with selectors */ }
     });
     
     return buttons;
   };
   
-  // Perform an immediate check with proper scope handling
-  const safetyCheck = () => {
-    // Check if we need to run yet (throttle checks)
-    const now = Date.now();
-    if (now - lastSafetyCheckTime < checkFrequency) {
-      return;
-    }
-    lastSafetyCheckTime = now;
-    safetyAttempts++;
+  // EVENT-DRIVEN APPROACH: Set up events that should trigger a safety check
+  
+  // 1. Cart change events
+  const cartChanged = () => {
+    stateChanged = true;
+    // Invalidate the button cache
+    lastButtonCheck = 0;
     
-    try {
-      // Create a state object to track the current state
-      const currentState = {
-        productLimitsAvailable: typeof productLimits !== 'undefined' && productLimits !== null,
-        validationComplete: !!validationComplete,
-        productId: typeof getProductId === 'function' ? getProductId() : null,
-        hasSavedState: false
-      };
-      
-      // Try to get saved validation state
-      const savedState = getValidationState();
-      if (savedState) {
-        currentState.hasSavedState = true;
-        currentState.savedIsValid = savedState.isValid;
-      }
-      
-      // If state hasn't changed since last check, skip processing
-      if (lastSafetyCheckState && 
-          JSON.stringify(currentState) === JSON.stringify(lastSafetyCheckState) && 
-          safetyAttempts > 3) { // Always run the first few checks
-        return;
-      }
-      lastSafetyCheckState = currentState;
-      
-      // First, check if validation is complete yet
-      if (!validationComplete && safetyAttempts < maxSafetyAttempts) {
-        if (safetyAttempts % 3 === 0) { // Only log occasionally
-          debugLog(`Safety check: Validation not complete yet (attempt ${safetyAttempts})`);
-        }
-        return; // Wait until validation is complete before making any decisions
-      }
-      
-      // Check if productLimits variable exists in the global scope
-      if (!currentState.productLimitsAvailable) {
-        if (safetyAttempts % 3 === 0) { // Only log occasionally
-          debugLog('Safety check: productLimits not available yet');
-        }
-        
-        // If we have a saved validation state, use that instead
-        if (currentState.hasSavedState) {
-          if (safetyAttempts % 3 === 0) { // Only log occasionally
-            debugLog('Safety check: Using saved validation state:', savedState);
-          }
-          
-          // If saved state indicates invalid, keep buttons disabled
-          if (!savedState.isValid && savedState.message) {
-            // Use the local function if the global one isn't available
-            const buttonFindFn = typeof findCheckoutButtons === 'function' ? findCheckoutButtons : localFindCheckoutButtons;
-            const checkoutButtons = buttonFindFn();
-            
-            if (checkoutButtons.length > 0) {
-              // Only update buttons if necessary, not on every check
-              let needsDisabling = false;
-              checkoutButtons.forEach(button => {
-                if (!button.disabled || !button.classList.contains('limit-disabled')) {
-                  needsDisabling = true;
-                }
-              });
-              
-              if (needsDisabling) {
-                debugLog('Safety check: Disabling buttons based on saved invalid state');
-                if (typeof disableCheckoutButtons === 'function') {
-                  disableCheckoutButtons(checkoutButtons, savedState.message);
-                } else {
-                  // Fallback if the function isn't available
-                  checkoutButtons.forEach(button => {
-                    button.disabled = true;
-                    button.style.opacity = '0.5';
-                  });
-                  if (typeof showLimitWarning === 'function' && savedState.message) {
-                    showLimitWarning(savedState.message);
-                  }
-                }
-              }
-            }
-          }
-        }
-      } else {
-        // We have product limits, run normal validation logic less frequently
-        if (safetyAttempts % 5 === 0) { // Run this section less frequently
-          // Verify that we have a product ID to work with
-          const currentProductId = currentState.productId;
-          if (!currentProductId) {
-            return;
-          }
-          
-          // Verify all checkout buttons have correct state
-          const buttonFindFn = typeof findCheckoutButtons === 'function' ? findCheckoutButtons : localFindCheckoutButtons;
-          const checkoutButtons = buttonFindFn();
-          
-          if (!checkoutButtons || checkoutButtons.length === 0) {
-            return;
-          }
-          
-          // Use the last validation result if available, otherwise re-validate
-          const validationResult = lastValidationResult || validateTotalQuantity(0, productLimits);
-          
-          // If validation shows limits are not met, ensure buttons are disabled
-          if (!validationResult.withinLimits) {
-            let foundEnabledButtons = false;
-            
-            checkoutButtons.forEach(button => {
-              if (!button.disabled || !button.classList.contains('limit-disabled')) {
-                foundEnabledButtons = true;
-              }
-            });
-            
-            if (foundEnabledButtons) {
-              debugLog('Safety check: Re-disabling checkout buttons');
-              if (typeof disableCheckoutButtons === 'function') {
-                disableCheckoutButtons(checkoutButtons, validationResult.message);
-              } else {
-                checkoutButtons.forEach(button => {
-                  button.disabled = true;
-                  button.style.opacity = '0.5';
-                });
-              }
-            }
-          } 
-          // If validation shows limits are met but buttons are disabled, enable them
-          else if (validationResult.withinLimits) {
-            let foundDisabledButtons = false;
-            
-            checkoutButtons.forEach(button => {
-              if (button.disabled && 
-                  (button.classList.contains('limit-disabled') || 
-                   button.hasAttribute('data-limit-preemptive-disabled'))) {
-                foundDisabledButtons = true;
-              }
-            });
-            
-            if (foundDisabledButtons) {
-              debugLog('Safety check: Re-enabling checkout buttons');
-              if (typeof enableCheckoutButtons === 'function') {
-                enableCheckoutButtons(checkoutButtons);
-              } else {
-                checkoutButtons.forEach(button => {
-                  button.disabled = false;
-                  button.style.opacity = '';
-                });
-              }
-            }
-          }
-        }
-      }
-      
-      // Progressively reduce check frequency as we go
-      if (safetyAttempts === 5) {
-        checkFrequency = 2000; // 2 seconds
-        debugLog('Safety check: Reducing frequency to 2 seconds');
-      } else if (safetyAttempts === 15) {
-        checkFrequency = 5000; // 5 seconds
-        debugLog('Safety check: Reducing frequency to 5 seconds');
-      } else if (safetyAttempts === 30) {
-        checkFrequency = 10000; // 10 seconds 
-        debugLog('Safety check: Reducing frequency to 10 seconds');
-      }
-    } catch (error) {
-      console.error('Unexpected error in safety check:', error);
-      
-      // If we get many errors, stop the safety checks
-      if (safetyAttempts > 5 && safetyInterval) {
-        clearInterval(safetyInterval);
-        console.warn('Disabled safety checks due to repeated errors');
-      }
-    }
+    // Run a check after a short delay to let other operations complete
+    setTimeout(performSafetyCheck, 250);
   };
   
-  // Start the safety checks with a longer initial delay
-  setTimeout(() => {
-    // First check
-    safetyCheck();
-    
-    // Set interval at a lower frequency
-    safetyInterval = setInterval(safetyCheck, 500);
-    debugLog('Safety check interval started');
-    
-    // After a reasonable time, reduce the check frequency automatically
-    setTimeout(() => {
-      if (safetyInterval) {
-        clearInterval(safetyInterval);
-        safetyInterval = setInterval(safetyCheck, 2000);
-        debugLog('Safety check frequency reduced to 2 seconds');
-      }
-    }, 20000); // After 20 seconds
-  }, 4000); // Initial delay increased to 4 seconds
+  // 2. Register for cart form submissions
+  document.addEventListener('submit', (event) => {
+    const form = event.target;
+    if (form && form.action && form.action.includes('/cart/add')) {
+      debugLog('Cart form submitted, scheduling safety check');
+      cartChanged();
+    }
+  });
   
-  // Also run it on visibility changes
+  // 3. Register for quantity input changes
+  document.addEventListener('change', (event) => {
+    const input = event.target;
+    if (input && 
+        (input.name === 'quantity' || 
+         input.name && input.name.includes('updates[') || 
+         input.classList.contains('js-qty__input'))) {
+      debugLog('Quantity input changed, scheduling safety check');
+      cartChanged();
+    }
+  });
+  
+  // 4. Track DOM changes that might affect checkout buttons
+  const buttonObserver = new MutationObserver((mutations) => {
+    let shouldCheck = false;
+    
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList' && mutation.addedNodes.length) {
+        // Check if anything checkout-related was added
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType !== 1) continue; // Skip non-element nodes
+          
+          // Only process if this looks like a checkout button or container
+          if ((node.tagName === 'BUTTON' || node.tagName === 'INPUT' || node.tagName === 'A') &&
+              (node.name === 'checkout' || 
+               (node.href && node.href.includes('/checkout')) ||
+               node.classList.contains('shopify-payment-button__button'))) {
+            shouldCheck = true;
+            break;
+          }
+          
+          // Check for checkout containers
+          if (node.classList && 
+              (node.classList.contains('shopify-payment-button') ||
+               node.classList.contains('cart__submit-controls'))) {
+            shouldCheck = true;
+            break;
+          }
+        }
+      }
+      
+      if (shouldCheck) break;
+    }
+    
+    if (shouldCheck) {
+      debugLog('DOM changed with possible checkout buttons, scheduling safety check');
+      // Invalidate the button cache
+      lastButtonCheck = 0;
+      // Run a check after a short delay to let the DOM settle
+      setTimeout(performSafetyCheck, 250);
+    }
+  });
+  
+  // Only observe areas that typically contain checkout buttons
+  const checkoutContainers = [
+    '.cart__footer', 
+    '.cart-template__footer',
+    '.shopify-payment-button',
+    '.product-form',
+    '.cart__buttons-container',
+    'form[action="/cart"]',
+    'form[action="/checkout"]'
+  ];
+  
+  const containers = [];
+  checkoutContainers.forEach(selector => {
+    const elements = document.querySelectorAll(selector);
+    elements.forEach(el => containers.push(el));
+  });
+  
+  // If we found containers, observe them
+  if (containers.length > 0) {
+    containers.forEach(container => {
+      buttonObserver.observe(container, {
+        childList: true,
+        subtree: true
+      });
+    });
+    debugLog(`Observing ${containers.length} checkout containers for button changes`);
+  } else {
+    // Fallback - observe body but with a more specific callback
+    buttonObserver.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+    debugLog('Fallback: Observing document body for checkout button changes');
+  }
+  
+  // MINIMAL BACKGROUND POLLING
+  // Still maintain a much less frequent background check as a safety net
+  
+  // Run first check after page has had time to settle
+  setTimeout(() => {
+    debugLog('Running initial safety check');
+    performSafetyCheck();
+    
+    // Set up a much less frequent interval as a backup (every 10 seconds)
+    const backupInterval = setInterval(() => {
+      // Only run the check if:
+      // 1. The document is visible (no point checking in background tabs)
+      // 2. Validation is complete (don't interrupt ongoing validation)
+      if (document.visibilityState === 'visible' && validationComplete) {
+        performSafetyCheck();
+      }
+    }, 10000); // 10 seconds instead of 500ms!
+    
+    // After 5 minutes, we can likely stop the backup polling entirely
+    setTimeout(() => {
+      clearInterval(backupInterval);
+      debugLog('Background safety checks stopped after 5 minutes');
+    }, 300000); // 5 minutes
+    
+  }, 8000); // Initial delay increased to 8 seconds to let page fully load
+  
+  // Run check when tab becomes visible again
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-      setTimeout(safetyCheck, 200);
+      debugLog('Page became visible, running safety check');
+      setTimeout(performSafetyCheck, 250);
     }
   });
   
