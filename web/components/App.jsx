@@ -3,6 +3,8 @@ import { Provider as AppBridgeProvider } from "@shopify/app-bridge-react";
 import { AppProvider } from "@shopify/polaris";
 import enTranslations from "@shopify/polaris/locales/en.json";
 import Dashboard from "./Dashboard"; // The main dashboard component
+import { NavigationMenu } from "@shopify/app-bridge-react";
+// Add the NavigationMenu import above
 
 function App() {
   // Get the API key from the window.gadgetConfig, falling back to process.env if necessary
@@ -46,13 +48,27 @@ function App() {
     );
   };
 
+  // Define the navigation menu items
+  const navigationMarkup = (
+    <NavigationMenu
+      navigationLinks={[
+        {
+          label: "Dashboard",
+          destination: "/",
+        },
+      ]}
+    />
+  );
+
   return (
     <AppBridgeWrapper>
       <AppProvider i18n={enTranslations}>
+        {navigationMarkup}
         <Dashboard />
       </AppProvider>
     </AppBridgeWrapper>
   );
 }
+
 
 export default App;
