@@ -102,7 +102,6 @@ function getValidationState() {
 }
 
 // Immediate preemptive button disabling - executed synchronously
-// Immediate preemptive button disabling - executed synchronously
 (function() {
   // Check for saved validation state from previous page view
   const savedState = getValidationState();
@@ -135,6 +134,23 @@ function getValidationState() {
         button.style.pointerEvents = 'none';
         button.setAttribute('data-limit-preemptive-disabled', 'true');
         
+        // Store the original button text/value
+        if (button.tagName === 'BUTTON' || button.tagName === 'A' || button.tagName === 'SPAN') {
+          if (!button.hasAttribute('data-original-text') && button.innerText) {
+            button.setAttribute('data-original-text', button.innerText);
+          }
+          
+          // Avoid changing text for buttons with only icons/images
+          if (button.innerText && !button.querySelector('img, svg')) {
+            button.innerText = "Verifying...";
+          }
+        } else if (button.tagName === 'INPUT') {
+          if (!button.hasAttribute('data-original-value') && button.value) {
+            button.setAttribute('data-original-value', button.value);
+          }
+          button.value = "Verifying...";
+        }
+        
         // For stronger disable, add more attributes
         if (disableStrength === 'strong') {
           button.style.cursor = 'not-allowed';
@@ -151,15 +167,25 @@ function getValidationState() {
     return buttonsFound;
   }
   
-  // Run immediately
-  const initialCount = disableButtons();
-  debugLog(`Preemptively disabled ${initialCount} checkout buttons (${disableStrength} mode)`);
+  // Only disable preemptively if we have an invalid saved state or we're on a product page
+  if (savedState && !savedState.isValid) {
+    const initialCount = disableButtons();
+    debugLog(`Preemptively disabled ${initialCount} checkout buttons (${disableStrength} mode)`);
+  } else if (window.location.pathname.includes('/products/')) {
+    // On product pages, we still want to do the initial verification
+    const initialCount = disableButtons();
+    debugLog(`Preemptively disabled ${initialCount} checkout buttons for initial verification`);
+  } else {
+    debugLog('No invalid saved state and not on product page, not disabling buttons preemptively');
+  }
   
   // Also run after DOM is fully loaded to catch any dynamic buttons
   if (document.readyState !== 'complete') {
     document.addEventListener('DOMContentLoaded', function() {
-      const domReadyCount = disableButtons();
-      debugLog(`DOMContentLoaded: disabled ${domReadyCount} checkout buttons`);
+      if (savedState && !savedState.isValid) {
+        const domReadyCount = disableButtons();
+        debugLog(`DOMContentLoaded: disabled ${domReadyCount} checkout buttons`);
+      }
     });
   }
   
@@ -173,6 +199,7 @@ function getValidationState() {
     });
   }
 })();
+
 
 // Add this at the beginning of your orderLimitValidator.js file
 (function diagnoseScriptLoading() {
@@ -698,6 +725,7 @@ function displayCartErrorMessage(message) {
 }
 
   // Function to immediately disable checkout buttons - this gets called FIRST on any cart change
+// Function to immediately disable checkout buttons - this gets called FIRST on any cart change
 function immediatelyDisableCheckoutButtons() {
   // Record time of this update to avoid excessive updates
   const now = Date.now();
@@ -737,6 +765,17 @@ function immediatelyDisableCheckoutButtons() {
           button.setAttribute('data-original-opacity', button.style.opacity || '');
           button.setAttribute('data-original-pointer-events', button.style.pointerEvents || '');
           button.setAttribute('data-original-cursor', button.style.cursor || '');
+          
+          // Store the original button text/value
+          if (button.tagName === 'BUTTON' || button.tagName === 'A' || button.tagName === 'SPAN') {
+            if (!button.hasAttribute('data-original-text') && button.innerText) {
+              button.setAttribute('data-original-text', button.innerText);
+            }
+          } else if (button.tagName === 'INPUT') {
+            if (!button.hasAttribute('data-original-value') && button.value) {
+              button.setAttribute('data-original-value', button.value);
+            }
+          }
         }
         
         // Aggressively disable the button
@@ -746,6 +785,16 @@ function immediatelyDisableCheckoutButtons() {
         button.style.cursor = 'not-allowed';
         button.classList.add('limit-disabled');
         
+        // Change button text/value to "Verifying..."
+        if (button.tagName === 'BUTTON' || button.tagName === 'A' || button.tagName === 'SPAN') {
+          // Avoid changing text for buttons with only icons/images
+          if (button.innerText && !button.querySelector('img, svg')) {
+            button.innerText = "Verifying...";
+          }
+        } else if (button.tagName === 'INPUT') {
+          button.value = "Verifying...";
+        }
+        
         foundButtons.push(button);
       });
     } catch (e) {
@@ -753,7 +802,7 @@ function immediatelyDisableCheckoutButtons() {
     }
   });
   
-  debugLog(`Immediately disabled ${foundButtons.length} checkout buttons`);
+  debugLog(`Immediately disabled ${foundButtons.length} checkout buttons with "Verifying..." text`);
   
   // Schedule a safety check to ensure validation completes
   if (disableCheckoutTimer) {
@@ -1283,6 +1332,23 @@ function enableCheckoutButtons(buttons) {
     button.classList.remove('limit-disabled');
     button.classList.remove('limit-initial-disabled');
     button.removeAttribute('data-limit-preemptive-disabled');
+    
+    // Restore the original button text/value
+    if (button.tagName === 'BUTTON' || button.tagName === 'A' || button.tagName === 'SPAN') {
+      const originalText = button.getAttribute('data-original-text');
+      if (originalText) {
+        button.innerText = originalText;
+      }
+      button.removeAttribute('data-original-text');
+    } else if (button.tagName === 'INPUT') {
+      const originalValue = button.getAttribute('data-original-value');
+      if (originalValue) {
+        button.value = originalValue;
+      }
+      button.removeAttribute('data-original-value');
+    }
+    
+    // Clean up other original state attributes
     button.removeAttribute('data-original-disabled');
     button.removeAttribute('data-original-opacity');
     button.removeAttribute('data-original-pointer-events');
@@ -1308,6 +1374,17 @@ function disableCheckoutButtons(buttons, message) {
       button.setAttribute('data-original-opacity', button.style.opacity || '');
       button.setAttribute('data-original-pointer-events', button.style.pointerEvents || '');
       button.setAttribute('data-original-cursor', button.style.cursor || '');
+      
+      // Save original text/value
+      if (button.tagName === 'BUTTON' || button.tagName === 'A' || button.tagName === 'SPAN') {
+        if (!button.hasAttribute('data-original-text') && button.innerText) {
+          button.setAttribute('data-original-text', button.innerText);
+        }
+      } else if (button.tagName === 'INPUT') {
+        if (!button.hasAttribute('data-original-value') && button.value) {
+          button.setAttribute('data-original-value', button.value);
+        }
+      }
     }
     
     // Keep button disabled
@@ -1317,7 +1394,20 @@ function disableCheckoutButtons(buttons, message) {
     button.style.cursor = 'not-allowed';
     button.classList.add('limit-disabled');
     
-    // Add warning to innerHTML if possible
+    // IMPORTANT FIX: Restore the original button text rather than keeping "Verifying..."
+    if (button.tagName === 'BUTTON' || button.tagName === 'A' || button.tagName === 'SPAN') {
+      const originalText = button.getAttribute('data-original-text');
+      if (originalText) {
+        button.innerText = originalText;
+      }
+    } else if (button.tagName === 'INPUT') {
+      const originalValue = button.getAttribute('data-original-value');
+      if (originalValue) {
+        button.value = originalValue;
+      }
+    }
+    
+    // Add warning icon to the button
     if (!button.querySelector('.limit-warning-text')) {
       try {
         const warningSpan = document.createElement('span');
@@ -1337,6 +1427,7 @@ function disableCheckoutButtons(buttons, message) {
     showLimitWarning(message);
   }
 }
+
 
 
   // ADD these new functions
@@ -1612,19 +1703,35 @@ async function initializeValidation() {
       button.disabled = false;
       button.style.opacity = '';
       button.style.pointerEvents = '';
+      
+      // Restore original button text if available
+      if (button.tagName === 'BUTTON' || button.tagName === 'A' || button.tagName === 'SPAN') {
+        const originalText = button.getAttribute('data-original-text');
+        if (originalText) {
+          button.innerText = originalText;
+        }
+      } else if (button.tagName === 'INPUT') {
+        const originalValue = button.getAttribute('data-original-value');
+        if (originalValue) {
+          button.value = originalValue;
+        }
+      }
+      
       button.removeAttribute('data-limit-preemptive-disabled');
+      button.removeAttribute('data-original-text');
+      button.removeAttribute('data-original-value');
     });
     validationComplete = true;
     return;
   }
 
-  // Start by immediately disabling all checkout buttons
+  // Start by immediately disabling all checkout buttons with "Verifying..." text
   const buttons = immediatelyDisableCheckoutButtons();
   buttons.forEach(button => {
     button.classList.add('limit-initial-disabled');
   });
   
-  debugLog(`Initially disabled ${buttons.length} checkout buttons while validating`);
+  debugLog(`Initially disabled ${buttons.length} checkout buttons with "Verifying..." text while validating`);
   
   // Get previously saved state
   const savedState = getValidationState();
@@ -1669,16 +1776,10 @@ async function initializeValidation() {
     productLimits = limits;
     
     if (!limits) {
-      debugLog('No limits could be retrieved, enabling the checkout button');
-        // Enable checkout buttons if no limits are defined
+      debugLog('No limits could be retrieved, allowing checkout to proceed');
+      // Enable checkout buttons if no limits are defined
       const buttons = document.querySelectorAll('[data-limit-preemptive-disabled="true"]');
-      buttons.forEach(button => {
-        button.disabled = false;
-        button.style.opacity = '';
-        button.style.pointerEvents = '';
-        button.style.cursor = '';
-        button.removeAttribute('data-limit-preemptive-disabled');
-      });
+      enableCheckoutButtons(buttons);
       validationComplete = true;
       return;
     }
@@ -1704,7 +1805,9 @@ async function initializeValidation() {
     debugLog('Order limit validation fully initialized for product', productId);
   } catch (error) {
     console.error('Error during validation initialization:', error);
-    // In case of error, keep buttons disabled as a safety measure
+    // In case of error, restore buttons to original state to avoid broken UX
+    const buttons = document.querySelectorAll('[data-limit-preemptive-disabled="true"]');
+    enableCheckoutButtons(buttons);
     validationComplete = true;
   }
 
