@@ -1371,7 +1371,9 @@ function disableCheckoutButtons(buttons, message) {
     try {
       if (!productLimits) {
         // If we don't have limits, keep buttons disabled as a safety measure
-        debugLog('No product limits available, keeping checkout disabled for safety');
+        debugLog('No product limits available, allowing checkout to proceed');
+        const checkoutButtons = findCheckoutButtons();
+        enableCheckoutButtons(checkoutButtons);       
         return;
       }
   
@@ -1667,8 +1669,16 @@ async function initializeValidation() {
     productLimits = limits;
     
     if (!limits) {
-      debugLog('No limits could be retrieved, keeping checkout disabled for safety');
-      // Keep checkout buttons disabled as a safety measure
+      debugLog('No limits could be retrieved, enabling the checkout button');
+        // Enable checkout buttons if no limits are defined
+      const buttons = document.querySelectorAll('[data-limit-preemptive-disabled="true"]');
+      buttons.forEach(button => {
+        button.disabled = false;
+        button.style.opacity = '';
+        button.style.pointerEvents = '';
+        button.style.cursor = '';
+        button.removeAttribute('data-limit-preemptive-disabled');
+      });
       validationComplete = true;
       return;
     }
