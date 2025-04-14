@@ -1,15 +1,22 @@
+import React, { useCallback } from "react";
 import { Page, Text } from "@shopify/polaris";
-import { useNavigate } from "react-router-dom";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import { Redirect } from "@shopify/app-bridge/actions";
 
-export default function () {
-  const navigate = useNavigate();
+export default function About() {
+  const app = useAppBridge();
+  
+  const handleBackAction = useCallback(() => {
+    const redirect = Redirect.create(app);
+    redirect.dispatch(Redirect.Action.APP, '/');
+  }, [app]);
 
   return (
     <Page
       title="About"
       backAction={{
-        content: "Shop Information",
-        onAction: () => navigate("/"),
+        content: "Dashboard",
+        onAction: handleBackAction
       }}
     >
       <Text variant="bodyMd" as="p">

@@ -1,4 +1,57 @@
-.gadgetLogo {
-  margin: 14px auto;
-  height: 44px;
+/* web/components/App.css */
+.simple-nav {
+  display: flex;
+  padding: 12px 16px;
+  background-color: #f4f6f8;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #dfe3e8;
+}
+
+.simple-nav a {
+  margin-right: 20px;
+  text-decoration: none;
+  color: #212b36;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.simple-nav a:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.simple-nav a.active {
+  background-color: rgba(0, 0, 0, 0.07);
+  font-weight: 600;
+}
+
+.page-content {
+  padding: 20px;
+}
+
+/* Add this to web/components/App.css */
+.custom-action-button {
+  display: inline-block;
+}
+
+.custom-action-button button {
+  background-color: #212b36;
+  color: white;
+  border-color: #212b36;
+  font-weight: 500;
+  border-radius: 4px;
+  min-height: 36px;
+  padding: 6px 16px;
+  border-width: 1px;
+  border-style: solid;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 0.2s ease-in-out, color 0.2s ease-in-out;
+}
+
+.custom-action-button button:hover {
+  background-color: #0e1418;
+  color: white;
+  border-color: #0e1418;
 }

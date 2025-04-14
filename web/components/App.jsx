@@ -1,18 +1,14 @@
-import React from "react";
-import { Provider as AppBridgeProvider } from "@shopify/app-bridge-react";
+import React, { useCallback, useEffect, useState } from "react";
+import { Provider as AppBridgeProvider, useAppBridge } from "@shopify/app-bridge-react";
 import { AppProvider } from "@shopify/polaris";
 import enTranslations from "@shopify/polaris/locales/en.json";
-import { NavigationMenu } from "@shopify/app-bridge-react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import Dashboard from "./Dashboard";
-import ProductLimit from "../routes/productLimit";
-import AdaptorLink from "./AdaptorLink";
+import Dashboard from "./Dashboard"; // The main dashboard component
 
 function App() {
   // Get the API key from the window.gadgetConfig, falling back to process.env if necessary
   const apiKey = window.gadgetConfig?.apiKeys?.shopify || process.env.SHOPIFY_API_KEY;
   
-  // More robustly extract the host from URL parameters
+  // Extract the host from URL parameters
   const getHost = () => {
     const searchParams = new URLSearchParams(window.location.search);
     return searchParams.get("host");
@@ -50,35 +46,12 @@ function App() {
     );
   };
 
-  // Define the navigation menu items
-  const navigationMarkup = (
-    <NavigationMenu
-      navigationLinks={[
-        {
-          label: "Dashboard",
-          destination: "/",
-        },
-        {
-          label: "Product Limit",
-          destination: "/product-limit",
-        },
-      ]}
-    />
-  );
-
   return (
-    <BrowserRouter>
-      <AppBridgeWrapper>
-        <AppProvider i18n={enTranslations} linkComponent={AdaptorLink}>
-          {navigationMarkup}
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/product-limit" element={<ProductLimit />} />
-            <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        </AppProvider>
-      </AppBridgeWrapper>
-    </BrowserRouter>
+    <AppBridgeWrapper>
+      <AppProvider i18n={enTranslations}>
+        <Dashboard />
+      </AppProvider>
+    </AppBridgeWrapper>
   );
 }
 
