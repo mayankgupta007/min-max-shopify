@@ -1,10 +1,12 @@
-import React, { useMemo } from "react";
+import React from "react";
 import { Provider as AppBridgeProvider } from "@shopify/app-bridge-react";
 import { AppProvider } from "@shopify/polaris";
 import enTranslations from "@shopify/polaris/locales/en.json";
-import Dashboard from "./Dashboard"; // The main dashboard component
 import { NavigationMenu } from "@shopify/app-bridge-react";
-// Add the NavigationMenu import above
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import Dashboard from "./Dashboard";
+import ProductLimit from "../routes/productLimit";
+import AdaptorLink from "./AdaptorLink";
 
 function App() {
   // Get the API key from the window.gadgetConfig, falling back to process.env if necessary
@@ -56,19 +58,28 @@ function App() {
           label: "Dashboard",
           destination: "/",
         },
+        {
+          label: "Product Limit",
+          destination: "/product-limit",
+        },
       ]}
     />
   );
 
   return (
-    <AppBridgeWrapper>
-      <AppProvider i18n={enTranslations}>
-        {navigationMarkup}
-        <Dashboard />
-      </AppProvider>
-    </AppBridgeWrapper>
+    <BrowserRouter>
+      <AppBridgeWrapper>
+        <AppProvider i18n={enTranslations} linkComponent={AdaptorLink}>
+          {navigationMarkup}
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/product-limit" element={<ProductLimit />} />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </AppProvider>
+      </AppBridgeWrapper>
+    </BrowserRouter>
   );
 }
-
 
 export default App;
