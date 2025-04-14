@@ -1,57 +1,134 @@
-import React, { useMemo } from "react";
-import { Provider as AppBridgeProvider } from "@shopify/app-bridge-react";
+import React, { useCallback, useEffect, useState } from "react";
+import { Provider as AppBridgeProvider, useAppBridge } from "@shopify/app-bridge-react";
 import { AppProvider } from "@shopify/polaris";
 import enTranslations from "@shopify/polaris/locales/en.json";
-import Dashboard from "./Dashboard"; // The main dashboard component
+import { NavigationMenu } from "@shopify/app-bridge-react";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { History, Redirect } from "@shopify/app-bridge/actions";
+import Dashboard from "./Dashboard";
+import ProductLimit from "./ProductLimit";
+import About from "../routes/about";
+import AdaptorLink from "./AdaptorLink";
+import "./App.css";
+
+// Navigation items shared across both navigation implementations
+const navigationItems = [
+  {
+    label: "Dashboard",
+    destination: "/",
+  },
+  {
+    label: "Product Limit",
+    destination: "/product-limit",
+  },
+  {
+    label: "About",
+    destination: "/about",
+  },
+];
+
+// Component to sync React Router with App Bridge
+function AppBridgeNavigationSync() {
+  const app = useAppBridge();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!app) return;
+    
+    // This listens to App Bridge navigation and updates React Router
+    const unsubscribe = History.create(app).subscribe(History.Action.PUSH, (payload) => {
+      const path = payload.path;
+      
+      // Only navigate if we're not already at the right path
+      if (path !== location.pathname) {
+        navigate(path, { replace: true });
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [app, location.pathname, navigate]);
+  
+  return null;
+}
+
+// Component that wraps the actual app content
+function AppContent() {
+  const app = useAppBridge();
+  const location = useLocation();
+  
+  // Determine if we're in embedded mode (inside Shopify admin)
+  // We can use the app object as a proxy for determining this
+  const isEmbedded = Boolean(app);
+
+  return (
+    <>
+      <AppBridgeNavigationSync />
+      
+      {/* Always show Shopify's NavigationMenu when embedded */}
+      {isEmbedded && (
+        <NavigationMenu
+          navigationLinks={navigationItems}
+        />
+      )}
+      
+      {/* Show simple navbar when not embedded */}
+      {!isEmbedded && (
+        <div className="simple-nav">
+          {navigationItems.map(item => (
+            <a 
+              key={item.destination}
+              href={item.destination}
+              className={location.pathname === item.destination ? "active" : ""}
+            >
+              {item.label}
+            </a>
+          ))}
+        </div>
+      )}
+      
+      <div className="page-content">
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/product-limit" element={<ProductLimit />} />
+          <Route path="/about" element={<About />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </div>
+    </>
+  );
+}
 
 function App() {
   // Get the API key from the window.gadgetConfig, falling back to process.env if necessary
   const apiKey = window.gadgetConfig?.apiKeys?.shopify || process.env.SHOPIFY_API_KEY;
   
-  // More robustly extract the host from URL parameters
+  // Extract the host from URL parameters
   const getHost = () => {
     const searchParams = new URLSearchParams(window.location.search);
     return searchParams.get("host");
   };
   
   const host = getHost();
-
-  // Create a wrapper component that handles the missing host case
-  const AppBridgeWrapper = ({ children }) => {
-    // Only render AppBridge if we have both required params
-    if (!apiKey || !host) {
-      return (
-        <div style={{ padding: "20px", maxWidth: "600px", margin: "40px auto", textAlign: "center" }}>
-          <h1>App Configuration Error</h1>
-          <p>Your app is not being loaded properly within Shopify admin. This could happen if:</p>
-          <ul style={{ textAlign: "left" }}>
-            <li>You're opening the app directly instead of through the Shopify admin</li>
-            <li>The URL parameters are missing or not being passed correctly</li>
-            <li>You need to reinstall the app on your store</li>
-          </ul>
-          <p>Try accessing your app from your Shopify admin &gt; Apps section.</p>
-          <div style={{ marginTop: "20px", padding: "10px", backgroundColor: "#f5f5f5", borderRadius: "4px" }}>
-            <p><strong>Debug Info:</strong></p>
-            <p>API Key present: {apiKey ? "Yes" : "No"}</p>
-            <p>Host present: {host ? "Yes" : "No"}</p>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <AppBridgeProvider config={{ apiKey, host, forceRedirect: true }}>
-        {children}
-      </AppBridgeProvider>
-    );
-  };
+  
+  // Check if we're running in development mode and not embedded in Shopify
+  const isDevelopmentMode = !host || process.env.NODE_ENV === "development";
 
   return (
-    <AppBridgeWrapper>
-      <AppProvider i18n={enTranslations}>
-        <Dashboard />
-      </AppProvider>
-    </AppBridgeWrapper>
+    <BrowserRouter>
+      {/* If we have both API key and host, use AppBridge, otherwise render content directly */}
+      {apiKey && host ? (
+        <AppBridgeProvider config={{ apiKey, host, forceRedirect: true }}>
+          <AppProvider i18n={enTranslations} linkComponent={AdaptorLink}>
+            <AppContent />
+          </AppProvider>
+        </AppBridgeProvider>
+      ) : (
+        <AppProvider i18n={enTranslations}>
+          <AppContent />
+        </AppProvider>
+      )}
+    </BrowserRouter>
   );
 }
 

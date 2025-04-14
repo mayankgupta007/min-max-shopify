@@ -1,27 +1,50 @@
-// from https://polaris.shopify.com/components/utilities/app-provider#using-linkcomponent
-import { Link as ReactRouterLink } from 'react-router-dom';
 
-const IS_EXTERNAL_LINK_REGEX = /^(?:[a-z][a-z\d+.-]*:|\/\/)/;
+// File: web/components/AdaptorLink.jsx
 
-/**
- * @param { import("react").ComponentProps<NonNullable<import("@shopify/polaris").AppProviderProps["linkComponent"]>>} props
- */
-export function AdaptorLink(props) {
-  const { children, url = '', external, ref, ...rest } = props;
+import React, { useCallback } from "react";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import { Redirect } from "@shopify/app-bridge/actions";
 
-  if (external || IS_EXTERNAL_LINK_REGEX.test(url)) {
-    rest.target = '_blank';
-    rest.rel = 'noopener noreferrer';
+// This component adapts Shopify Polaris links to work with App Bridge
+export default function AdaptorLink({ url, children, external, ...rest }) {
+  const app = useAppBridge();
+  
+  const handleClick = useCallback((e) => {
+    // For external links, let the browser handle it
+    if (external) {
+      return;
+    }
+    
+    // Prevent default link behavior
+    e.preventDefault();
+    
+    // Use App Bridge redirect for internal links
+    if (url) {
+      const redirect = Redirect.create(app);
+      redirect.dispatch(Redirect.Action.APP, url);
+    }
+  }, [app, url, external]);
+  
+  if (external) {
     return (
-      <a href={url} {...rest}>
+      <a 
+        href={url} 
+        target="_blank" 
+        rel="noopener noreferrer" 
+        {...rest}
+      >
         {children}
       </a>
     );
   }
 
   return (
-    <ReactRouterLink to={url} {...rest}>
+    <a 
+      href={url} 
+      onClick={handleClick} 
+      {...rest}
+    >
       {children}
-    </ReactRouterLink>
+    </a>
   );
 }
