@@ -69,6 +69,26 @@ function LimitManager() {
     </div>
   ]);
 
+  // Styling for the CTA button to match EmptyState button
+  const ctaButtonStyle = {
+    // These values should match your EmptyState button exactly
+    backgroundColor: '#212b36', // Polaris default dark color
+    color: 'white',
+    border: 'none',
+    borderRadius: '4px',
+    padding: '0.5rem 1rem',
+    fontSize: '0.875rem',
+    fontWeight: '500',
+    cursor: 'pointer',
+    minHeight: '2.25rem',
+    lineHeight: '1.25rem',
+    textAlign: 'center',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: '6.25rem' // 100px to match EmptyState button width
+  };
+
   const renderContent = () => {
     if (loading) {
       return (
@@ -90,11 +110,38 @@ function LimitManager() {
     
     if (limits.length > 0) {
       return (
-        <DataTable
-          columnContentTypes={["text", "numeric", "numeric", "text"]}
-          headings={["Product Name", "Min Quantity", "Max Quantity", "Actions"]}
-          rows={rows}
-        />
+        <div>
+          {/* Header with title and CTA button */}
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            padding: '0 0 16px 0'
+          }}>
+            <Text variant="headingMd">Product Limits</Text>
+            
+            {/* Custom styled button to exactly match EmptyState button */}
+            <button 
+              onClick={navigateToProductLimit}
+              style={ctaButtonStyle}
+              onMouseOver={(e) => {
+                e.currentTarget.style.backgroundColor = '#0e1418'; // Darker on hover
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.backgroundColor = '#212b36'; // Back to normal
+              }}
+            >
+              Add Product Limit
+            </button>
+          </div>
+
+          {/* DataTable showing the limits */}
+          <DataTable
+            columnContentTypes={["text", "numeric", "numeric", "text"]}
+            headings={["Product Name", "Min Quantity", "Max Quantity", "Actions"]}
+            rows={rows}
+          />
+        </div>
       );
     }
     

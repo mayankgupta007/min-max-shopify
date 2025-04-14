@@ -28,3 +28,30 @@
 .page-content {
   padding: 20px;
 }
+
+/* Add this to web/components/App.css */
+.custom-action-button {
+  display: inline-block;
+}
+
+.custom-action-button button {
+  background-color: #212b36;
+  color: white;
+  border-color: #212b36;
+  font-weight: 500;
+  border-radius: 4px;
+  min-height: 36px;
+  padding: 6px 16px;
+  border-width: 1px;
+  border-style: solid;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 0.2s ease-in-out, color 0.2s ease-in-out;
+}
+
+.custom-action-button button:hover {
+  background-color: #0e1418;
+  color: white;
+  border-color: #0e1418;
+}
