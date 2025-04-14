@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Card, DataTable, Spinner, Text, EmptyState, Button } from "@shopify/polaris";
 import { api } from "../api";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import { Redirect } from "@shopify/app-bridge/actions";
 
 function LimitManager() {
   const [limits, setLimits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const app = useAppBridge();
 
   // Fetch all order limits when component mounts
   useEffect(() => {
@@ -44,6 +47,14 @@ function LimitManager() {
     } catch (error) {
       console.error("Error deleting limit:", error);
       alert(`Failed to delete limit: ${error.message || 'Unknown error'}`);
+    }
+  };
+
+  // Function to navigate to Product Limit page
+  const navigateToProductLimit = () => {
+    if (app) {
+      const redirect = Redirect.create(app);
+      redirect.dispatch(Redirect.Action.APP, '/product-limit');
     }
   };
 
@@ -90,7 +101,10 @@ function LimitManager() {
     return (
       <EmptyState
         heading="No product limits found"
-        action={{ content: "Reload Limits", onAction: loadOrderLimits }}
+        action={{ 
+          content: "Add Product Limit", 
+          onAction: navigateToProductLimit 
+        }}
         image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
       >
         <p>No product order limits have been set yet.</p>

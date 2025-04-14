@@ -1,62 +1,101 @@
 // File: web/components/ProductLimit.jsx
-import React, { useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { 
   Page, 
   Layout, 
   Card, 
   Text,
-  Banner,
-  Box
+  Button,
+  Box 
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { Redirect } from "@shopify/app-bridge/actions";
+import { Redirect, ResourcePicker } from "@shopify/app-bridge/actions";
+import OrderLimits from "./OrderLimits";
 
 export default function ProductLimit() {
   const app = useAppBridge();
+  const [picker, setPicker] = useState(null);
+  const [selectedProduct, setSelectedProduct] = useState(null);
   
   // Create a redirect action using App Bridge
-  const redirect = useCallback(() => {
+  const redirectToDashboard = useCallback(() => {
     const redirectAction = Redirect.create(app);
     // Navigate back to the dashboard
     redirectAction.dispatch(Redirect.Action.APP, '/');
   }, [app]);
+
+  // Initialize product picker
+  useEffect(() => {
+    if (app) {
+      const resourcePicker = ResourcePicker.create(app, {
+        resourceType: ResourcePicker.ResourceType.Product,
+        options: {
+          selectMultiple: false,
+          showVariants: false,
+        },
+      });
+
+      resourcePicker.subscribe(ResourcePicker.Action.SELECT, async (selectPayload) => {
+        const selection = selectPayload.selection;
+        if (selection && selection[0]) {
+          setSelectedProduct(selection[0]);
+        }
+      });
+
+      resourcePicker.subscribe(ResourcePicker.Action.CANCEL, () => {
+        console.log("Resource picker was canceled.");
+      });
+
+      setPicker(resourcePicker);
+    }
+  }, [app]);
+
+  const openProductPicker = () => {
+    if (picker) {
+      picker.dispatch(ResourcePicker.Action.OPEN);
+    }
+  };
+
+  const clearSelection = () => {
+    setSelectedProduct(null);
+  };
 
   return (
     <Page 
       title="Product Limit"
       backAction={{
         content: 'Dashboard',
-        onAction: redirect
+        onAction: redirectToDashboard
       }}
     >
       <Layout>
         <Layout.Section>
-          <Card>
-            <Box padding="400">
-              <Text as="p" variant="bodyMd">
-                This page demonstrates a properly integrated Shopify App Bridge page.
-              </Text>
-              <Text as="p" variant="bodyMd">
-                Notice that navigation between pages now happens smoothly without jitter.
-              </Text>
+          <Card sectioned>
+            <Text variant="headingMd">Add New Product Limit</Text>
+            <Box paddingBlockStart="300">
+              <Button onClick={openProductPicker} primary>
+                {selectedProduct ? "Change Product" : "Select Product"}
+              </Button>
+              {selectedProduct && (
+                <Box paddingBlockStart="300">
+                  <Button onClick={clearSelection} destructive>
+                    Clear Selection
+                  </Button>
+                </Box>
+              )}
             </Box>
           </Card>
-        </Layout.Section>
-        
-        <Layout.Section>
-          <Card>
-            <Box padding="400">
-              <Banner
-                title="App Bridge Integration"
-                status="success"
-              >
-                <p>
-                  This page uses Shopify's App Bridge navigation to ensure smooth
-                  transitions between pages in the Shopify Admin.
-                </p>
-              </Banner>
-            </Box>
-          </Card>
+
+          {selectedProduct && (
+            <Card sectioned>
+              <Text variant="headingMd">Selected Product</Text>
+              <Text variant="bodyMd">{selectedProduct.title}</Text>
+              {selectedProduct.id && (
+                <Text variant="bodyMd">Product ID: {selectedProduct.id}</Text>
+              )}
+              <OrderLimits selectedProduct={selectedProduct} />
+            </Card>
+          )}
         </Layout.Section>
       </Layout>
     </Page>
