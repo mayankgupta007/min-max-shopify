@@ -243,11 +243,11 @@ function LimitManager() {
   const fetchTotalCount = async () => {
     if (!currentShopId) {
       console.log("No shop ID available, skipping count fetch");
+      setTotalItems(0);
       return;
     }
 
     try {
-      // Always include shop filter
       // Always include shop filter
       const filterObj = {
         shop: { id: { equals: currentShopId } } // Correct relationship field
@@ -267,33 +267,47 @@ function LimitManager() {
         ];
       }
 
-      const countParams = {
-        filter: filterObj
-      };
+      console.log("Fetching count with params:", { filter: filterObj });
 
-      console.log("Fetching count with params:", countParams);
-      const response = await api.OrderLimit.findMany(countParams);
+      // Make a special query just to count total available records
+      const response = await api.OrderLimit.findMany({
+        filter: filterObj,
+        select: { id: true } // Only select the ID field to make the query faster
+      });
 
+      // Log the exact response for debugging
+      console.log("Count query response:", response);
+      console.log("Response type:", typeof response);
+      
       // Determine total based on the response format
+      let count = 0;
+      
       if (Array.isArray(response)) {
-        setTotalItems(response.length);
-        console.log(`Total items (array): ${response.length}`);
+        count = response.length;
+        console.log(`Total items (array): ${count}`);
       } else if (response && response.edges) {
-        setTotalItems(response.edges.length);
-        console.log(`Total items (edges): ${response.edges.length}`);
+        count = response.edges.length;
+        console.log(`Total items (edges): ${count}`);
       } else if (response && typeof response === 'object' && response.id) {
         // Single record case
-        setTotalItems(1);
+        count = 1;
         console.log('Total items: 1 (single record)');
       } else {
-        console.log('Unable to determine total count from response');
-        setTotalItems(0);
+        console.log('No items found');
+        count = 0;
       }
+      
+      // CRITICAL: Set the actual count, not a default value
+      setTotalItems(count);
+      console.log(`Set total items count to: ${count}`);
+      
     } catch (error) {
       console.error("Error fetching total count:", error);
-      // Don't show error UI for count failures
+      // In case of error, set to 0 instead of keeping old value
+      setTotalItems(0);
     }
   };
+
 
   const loadOrderLimits = async () => {
     if (!currentShopId) {
@@ -385,10 +399,12 @@ function LimitManager() {
       setLimits(limitItems);
       setHasPrevPage(currentPage > 1);
 
-      // Fallback count for pagination display
-      if (!totalItems) {
-        setTotalItems(Math.max(limitItems.length, currentPage * pageSize));
-      }
+    // If we got actual items, make sure the count is at least this length
+    // but don't artificially inflate the count to match page size
+    if (limitItems.length > 0 && (totalItems === 0 || totalItems < limitItems.length)) {
+      setTotalItems(limitItems.length);
+      console.log(`Updated total items count to match current page: ${limitItems.length}`);
+    }
 
     } catch (err) {
       console.error("Error loading order limits:", err);
@@ -686,6 +702,7 @@ function LimitManager() {
           )}
 
           {/* Pagination controls */}
+          {/* Pagination controls */}
           {!noResultsFound && limits.length > 0 && (
             <div style={{
               marginTop: '16px',
@@ -693,24 +710,31 @@ function LimitManager() {
               justifyContent: 'space-between',
               alignItems: 'center'
             }}>
-              {/* Results count */}
+              {/* Results count - IMPROVED VERSION */}
               <div style={{
                 color: '#637381',
                 fontSize: '13px'
               }}>
-                Showing page {currentPage} of {Math.max(1, Math.ceil(totalItems / pageSize))}
-                {totalItems > 0 && ` (${totalItems} total)`}
+                {totalItems === 0 ? (
+                  "Loading count..."
+                ) : totalItems === 1 ? (
+                  "1 product limit"
+                ) : (
+                  `Showing page ${currentPage} of ${Math.max(1, Math.ceil(totalItems / pageSize))} (${totalItems} items)`
+                )}
               </div>
 
-              {/* Pagination buttons */}
-              <div>
-                <Pagination
-                  hasPrevious={hasPrevPage}
-                  onPrevious={handlePrevPage}
-                  hasNext={hasNextPage}
-                  onNext={handleNextPage}
-                />
-              </div>
+              {/* Pagination buttons - only show if we have more than one page */}
+              {(hasPrevPage || hasNextPage) && (
+                <div>
+                  <Pagination
+                    hasPrevious={hasPrevPage}
+                    onPrevious={handlePrevPage}
+                    hasNext={hasNextPage}
+                    onNext={handleNextPage}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>
