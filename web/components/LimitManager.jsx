@@ -81,25 +81,36 @@ function LimitManager() {
     const checkAuthentication = async () => {
       try {
         console.log(`Checking authentication (attempt ${checkAttempts + 1})...`);
-
+    
+        // Extract shop from URL
+        const currentShopDomain = new URLSearchParams(window.location.search).get('shop');
+        console.log("Shop domain from URL:", currentShopDomain);
+    
         // Use our special global action that's allowed for unauthenticated users
-        const result = await api.getShopSession();
+        // Pass the shop domain to the action
+        const result = await api.getShopSession({
+          shopDomain: currentShopDomain
+        });
         console.log('Auth check result:', result);
-
+    
+        // Rest of the function remains the same
         if (result && result.authenticated && result.shopId) {
           console.log('Successfully authenticated with shop ID:', result.shopId);
-
+          console.log('Shop domain:', result.shopDomain || 'Unknown');
+    
           // If this is a development fallback, log it
           if (result.isDevelopmentFallback) {
             console.warn('Using development fallback authentication - not for production use');
           }
-
+    
           if (isMounted) {
             setIsAuthenticated(true);
             setCurrentShopId(result.shopId);
             setLoading(false);
           }
-        } else if (checkAttempts < 3) { // Reduce the number of retries
+        }
+        // Rest of the function continues as before...
+         else if (checkAttempts < 3) { // Reduce the number of retries
           // Not authenticated yet, retry with fewer attempts
           checkAttempts++;
           const delay = Math.min(1000 * checkAttempts, 3000);
@@ -110,29 +121,50 @@ function LimitManager() {
           }
         } else {
           // After the reduced attempts, try the development fallback directly
+          // After the reduced attempts, try the development fallback directly
           console.log("Regular authentication failed, checking for development fallback...");
 
           try {
-            // Use direct fallback method
-            if (process.env.NODE_ENV === "development" || window.location.hostname.includes("development")) {
-              // In development, try to get a shop ID directly
-              const shops = await api.shopifyShop.findMany({ first: 1 });
-
-              if (shops && shops.length > 0) {
-                const shopId = shops[0].id;
-                console.warn('Using direct development fallback authentication - NOT FOR PRODUCTION');
-
+            // Get current shop from URL
+            const currentShopDomain = new URLSearchParams(window.location.search).get('shop');
+            console.log("Development authentication - using shop from URL:", currentShopDomain);
+            
+            // Call getShopSession with the shop domain
+            if (currentShopDomain) {
+              const result = await api.getShopSession({
+                shopDomain: currentShopDomain
+              });
+              
+              if (result && result.authenticated && result.shopId) {
+                console.log('Successfully authenticated with shop ID:', result.shopId);
+                console.log('Shop domain:', result.shopDomain || 'Unknown');
+                
                 if (isMounted) {
                   setIsAuthenticated(true);
-                  setCurrentShopId(shopId);
+                  setCurrentShopId(result.shopId);
                   setLoading(false);
+                  return; // Exit early on success
                 }
-                return; // Exit early on success
               }
             }
+            
+            // Last resort fallback without a specific domain
+            const fallbackResult = await api.getShopSession();
+            if (fallbackResult && fallbackResult.authenticated && fallbackResult.shopId) {
+              console.warn('Last resort fallback authentication succeeded');
+              
+              if (isMounted) {
+                setIsAuthenticated(true);
+                setCurrentShopId(fallbackResult.shopId);
+                setLoading(false);
+              }
+            } else {
+              console.error("All authentication methods failed");
+            }
           } catch (fallbackError) {
-            console.error("Development fallback failed:", fallbackError);
+            console.error("Development fallback completely failed:", fallbackError);
           }
+
 
           // If we get here, all authentication methods failed
           console.log("Failed to authenticate after multiple attempts");
@@ -216,8 +248,9 @@ function LimitManager() {
 
     try {
       // Always include shop filter
+      // Always include shop filter
       const filterObj = {
-        shopId: { equals: currentShopId }
+        shop: { id: { equals: currentShopId } } // Correct relationship field
       };
 
       // Add search filter if needed
@@ -286,7 +319,7 @@ function LimitManager() {
 
       // ALWAYS include the shop filter
       const filterObj = {
-        shopId: { equals: currentShopId }
+        shop: { id: { equals: currentShopId } } // Correct relationship field
       };
 
       // Add search criteria if exists

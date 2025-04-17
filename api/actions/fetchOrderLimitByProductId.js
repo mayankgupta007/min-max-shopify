@@ -1,35 +1,38 @@
 // api/actions/fetchOrderLimitByProductId.js
-
 export const run = async ({ params, logger, api, connections, session }) => {
   try {
     // Ensure productId is a number
-    const productId = typeof params.productId === 'string' 
-      ? parseInt(params.productId, 10) 
-      : params.productId;
+    const productIdInput = params.productId;
+    const productId = typeof productIdInput === 'string' 
+      ? parseInt(productIdInput, 10) 
+      : productIdInput;
     
     if (isNaN(productId)) {
-      logger.warn(`Invalid product ID passed to fetchOrderLimitByProductId: ${params.productId}`);
-      throw new Error(`Invalid product ID: ${params.productId}`);
+      logger.warn(`Invalid product ID passed to fetchOrderLimitByProductId: ${productIdInput}`);
+      throw new Error(`Invalid product ID: ${productIdInput}`);
     }
     
     // Get the current shop ID for tenant isolation
-    const shopId = session?.shop?.id || connections.shopify?.currentShopId;
+    // Use the passed shopId if available, otherwise fall back to session
+    const shopId = params.shopId || session?.shop?.id || connections.shopify?.currentShopId;
     if (!shopId) {
-      logger.warn("No shop ID available in session or connections");
+      logger.warn("No shop ID available in params, session or connections");
       throw new Error("Shop not authenticated");
     }
     
     logger.info(`Searching for OrderLimit with productId: ${productId} for shop: ${shopId}`);
     
     // Use the API to search for an OrderLimit with the matching productId AND shop
+    // IMPORTANT: Using proper shop relationship field
     const orderLimit = await api.OrderLimit.maybeFindFirst({
       filter: {
         AND: [
           { productId: { equals: productId } },
-          { shopId: { equals: shopId } }
+          { shop: { id: { equals: shopId } } } // Correct relationship path
         ]
       }
     });
+
     
     if (orderLimit) {
       logger.info(`Found OrderLimit record with id: ${orderLimit.id}`);
@@ -55,4 +58,15 @@ export const run = async ({ params, logger, api, connections, session }) => {
     logger.error(`Error fetching OrderLimit by productId: ${error.message}`, { error });
     throw error;
   }
+};
+
+export const params = {
+  productId: { type: "string" }, // Keep this as string
+  shopId: { type: "string", optional: true }
+};
+
+
+export const options = {
+  returns: true,
+  triggers: { api: true }
 };

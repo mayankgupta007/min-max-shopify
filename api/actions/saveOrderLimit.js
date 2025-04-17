@@ -1,6 +1,17 @@
 /** @type { ActionRun } */
 export const run = async ({ params, logger, api, connections, session }) => {
-  const { productId, minLimit, maxLimit, productName, shopId: providedShopId } = params;
+
+// Convert productId from string to number for database operations
+  const productId = typeof params.productId === 'string' 
+    ? parseInt(params.productId, 10)
+    : params.productId;
+    
+  if (isNaN(productId)) {
+    logger.error(`Invalid productId: ${params.productId}`);
+    throw new Error(`Invalid productId: ${params.productId}`);
+  }
+
+  const { minLimit, maxLimit, productName, shopId: providedShopId } = params;
 
   // Get the current shop ID from session or connections
   const sessionShopId = session?.shop?.id || connections.shopify?.currentShopId;
@@ -81,12 +92,13 @@ export const run = async ({ params, logger, api, connections, session }) => {
 };
 
 export const params = {
-  productId: { type: "number" },
+  productId: { type: "string" }, // Change to string to match GraphQL expectations
   minLimit: { type: "number" },
   maxLimit: { type: "number" },
   productName: { type: "string", optional: true },
   shopId: { type: "string", optional: true },
 };
+
 
 export const options = {
   returns: true,

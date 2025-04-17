@@ -1,2 +1,1 @@
-// Allow users to only see order limits for their own shop
-($session.shopId == null) || (record.shopId == $session.shopId)
+(record.shop.id == $session.shop.id) || ($session.roles.includes("system-admin"))

@@ -99,12 +99,23 @@ const handleSaveLimits = async () => {
   setStatusMessage({ content: "", status: "" });
 
   try {
-    // Get the current shop ID
-    const shopSessionResponse = await api.getShopSession();
+    // Get the shop domain from URL
+    const currentShopDomain = new URLSearchParams(window.location.search).get('shop');
+    console.log("Current shop domain from URL:", currentShopDomain);
+    
+    // Get the current shop ID using the domain from URL
+    const shopSessionResponse = await api.getShopSession({
+      shopDomain: currentShopDomain
+    });
     console.log("Shop session response:", shopSessionResponse);
     
     if (!shopSessionResponse?.authenticated || !shopSessionResponse?.shopId) {
       throw new Error("Could not determine current shop. Please refresh and try again.");
+    }
+    
+    // Verify shop domain matches
+    if (shopSessionResponse.shopDomain !== currentShopDomain) {
+      console.warn(`Shop domain mismatch! URL: ${currentShopDomain}, Response: ${shopSessionResponse.shopDomain}`);
     }
     
     // Get the numeric product ID
@@ -116,7 +127,6 @@ const handleSaveLimits = async () => {
     }
     
     // Send the data to the saveOrderLimit function
-    // Just pass shopId - the global action will handle the conversion
     const data = {
       productId: numericProductId,
       minLimit: minLimitNum,
@@ -153,6 +163,7 @@ const handleSaveLimits = async () => {
 
 
 
+
 // In OrderLimits.jsx - update the handleFetchOrderLimit function:
 
 const handleFetchOrderLimit = async (providedNumericId = null) => {
@@ -181,6 +192,20 @@ const handleFetchOrderLimit = async (providedNumericId = null) => {
   setStatusMessage({ content: "", status: "" });
 
   try {
+    // Get the shop domain from URL
+    const currentShopDomain = new URLSearchParams(window.location.search).get('shop');
+    console.log("Current shop domain from URL:", currentShopDomain);
+    
+    // Ensure we're using the correct shop ID
+    const shopSessionResponse = await api.getShopSession({
+      shopDomain: currentShopDomain
+    });
+    console.log("Shop session for fetch:", shopSessionResponse);
+    
+    if (!shopSessionResponse?.authenticated || !shopSessionResponse?.shopId) {
+      throw new Error("Could not determine current shop. Please refresh and try again.");
+    }
+    
     let numericProductId = providedNumericId;
     
     // If numeric ID wasn't provided, extract it
@@ -214,7 +239,8 @@ const handleFetchOrderLimit = async (providedNumericId = null) => {
     console.log("About to call fetchOrderLimitById with:", numericProductId);
     // Add a try/catch specifically around the fetchOrderLimitById call
     try {
-      const orderLimit = await fetchOrderLimitById(numericProductId);
+      // Pass the shop ID to the fetch function
+      const orderLimit = await fetchOrderLimitById(numericProductId, shopSessionResponse.shopId);
       handleOrderLimitResponse(orderLimit);
     } catch (error) {
       console.error("Error from fetchOrderLimitById:", error);
@@ -241,6 +267,7 @@ const handleFetchOrderLimit = async (providedNumericId = null) => {
     setFetchLoading(false);
   }
 };
+
 
 
 // Helper function to handle the response from fetchOrderLimitById

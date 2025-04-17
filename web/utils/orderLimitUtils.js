@@ -51,15 +51,22 @@ export const extractNumericId = (input) => {
 /**
  * Fetch a single OrderLimit record by productId.
  * @param {string|number} input - The Shopify Global ID or numeric product ID.
+ * @param {string} shopId - The shop ID to filter by.
  * @returns {Promise<Object|null>} - Returns the fetched OrderLimit record or null if not found.
  */
-export const fetchOrderLimitById = async (input) => {
+export const fetchOrderLimitById = async (input, shopId) => {
   try {
-    console.log("fetchOrderLimitById called with input:", input);
+    console.log("fetchOrderLimitById called with input:", input, "shopId:", shopId);
     
     // If input is invalid, return null instead of making an API call
     if (input === null || input === undefined || input === "") {
       console.warn("Cannot fetch order limit: Product ID is null or undefined");
+      return null;
+    }
+    
+    // If shop ID is missing
+    if (!shopId) {
+      console.warn("Cannot fetch order limit: Shop ID is required");
       return null;
     }
     
@@ -79,11 +86,13 @@ export const fetchOrderLimitById = async (input) => {
       return null;
     }
     
-    console.log(`Calling API with productId=${numericId}`);
+    console.log(`Calling API with productId=${numericId} and shopId=${shopId}`);
     
     try {
+      // CRITICAL FIX: Convert numericId to string when passing to the API
       const response = await api.fetchOrderLimitByProductId({
-        productId: numericId
+        productId: String(numericId), // Convert to string for GraphQL
+        shopId: shopId
       });
       
       // Handle null response
@@ -95,6 +104,7 @@ export const fetchOrderLimitById = async (input) => {
       console.log(`Fetched order limit:`, response);
       return response;
     } catch (error) {
+      console.error(`API call error: ${error.message}`);
       // Specific handling for "not found" errors
       if (error?.message?.includes("not found") || 
           error?.message?.includes("Invalid product ID") ||
@@ -114,9 +124,11 @@ export const fetchOrderLimitById = async (input) => {
 
 
 
+
+
 /**
  * Save or update an OrderLimit record.
- * @param {Object} data - The data to save or update (e.g., productId, minLimit, maxLimit).
+ * @param {Object} data - The data to save or update (e.g., productId, minLimit, maxLimit, shopId).
  * @returns {Promise<Object>} - Returns the saved or updated OrderLimit record.
  */
 export const saveOrderLimit = async (data) => {
@@ -137,12 +149,21 @@ export const saveOrderLimit = async (data) => {
       processedData.productName = processedData.productTitle;
     }
 
-    // DO NOT add shop._link - we will pass shopId directly to the global action
-    // The global action will handle the conversion to shop._link format
+    // Ensure we have a shopId
+    if (!processedData.shopId) {
+      console.error("Missing shopId in saveOrderLimit");
+      throw new Error("Shop ID is required to save order limit");
+    }
 
     console.log("Saving order limit with processed data:", processedData);
 
-    const result = await api.saveOrderLimit(processedData);
+    // Ensure productId is passed as string for GraphQL
+    const apiCallData = {
+      ...processedData,
+      productId: String(processedData.productId) // Convert to string for API
+    };
+
+    const result = await api.saveOrderLimit(apiCallData);
     console.log("Save order limit result:", result);
 
     if (result && result.OrderLimit) {
@@ -161,17 +182,28 @@ export const saveOrderLimit = async (data) => {
 
 
 
+
+
 /**
  * Fetch all order limits with product details
  * @returns {Promise<Array>} Array of order limits with product details
  */
 export const fetchAllOrderLimits = async () => {
   try {
-    console.log("Fetching all order limits");
+    console.log("Fetching all order limits for shop:", shopId);
     
-    // Fetch all order limits
-    const allLimits = await api.OrderLimit.findMany();
-    console.log(`Found ${allLimits.length} order limits`);
+    if (!shopId) {
+      console.error("No shopId provided to fetchAllOrderLimits");
+      throw new Error("Shop ID is required");
+    }
+    
+    // Fetch order limits filtered by shop
+    const allLimits = await api.OrderLimit.findMany({
+      filter: {
+        shop: { id: { equals: shopId } }
+      }
+    });
+    console.log(`Found ${allLimits.length} order limits for shop ${shopId}`);
     
     // Enrich with product details where possible
     const enrichedLimits = await Promise.all(
