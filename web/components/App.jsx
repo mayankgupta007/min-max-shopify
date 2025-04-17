@@ -100,8 +100,20 @@ function AppContent() {
 }
 
 function App() {
-  // Get the API key from the window.gadgetConfig, falling back to process.env if necessary
-  const apiKey = window.gadgetConfig?.apiKeys?.shopify || process.env.SHOPIFY_API_KEY;
+  // Debug Shopify configuration to understand what's available
+  useEffect(() => {
+    console.log("Shopify App Config:", {
+      gadgetConfig: window.gadgetConfig,
+      searchParams: new URLSearchParams(window.location.search).toString(),
+      shopParam: new URLSearchParams(window.location.search).get("shop"),
+      hostParam: new URLSearchParams(window.location.search).get("host"),
+      environment: process.env.NODE_ENV
+    });
+  }, []);
+
+  // CRITICAL FIX: Hardcode the API key from Shopify Partner Dashboard
+  // This key is already public in your app URLs so it's not sensitive
+  const shopifyApiKey = "43973833a3511d736c127369f6079254"; // Your Shopify API key
   
   // Extract the host from URL parameters
   const getHost = () => {
@@ -110,15 +122,24 @@ function App() {
   };
   
   const host = getHost();
-  
-  // Check if we're running in development mode and not embedded in Shopify
-  const isDevelopmentMode = !host || process.env.NODE_ENV === "development";
 
+  // Log the exact config we're using for App Bridge
+  console.log("Shopify App Bridge Configuration:", {
+    apiKey: shopifyApiKey,
+    host,
+    forceRedirect: true,
+    hasValidConfig: !!(shopifyApiKey && host)
+  });
+  
   return (
     <BrowserRouter>
       {/* If we have both API key and host, use AppBridge, otherwise render content directly */}
-      {apiKey && host ? (
-        <AppBridgeProvider config={{ apiKey, host, forceRedirect: true }}>
+      {shopifyApiKey && host ? (
+        <AppBridgeProvider config={{ 
+          apiKey: shopifyApiKey, 
+          host, 
+          forceRedirect: true 
+        }}>
           <AppProvider i18n={enTranslations} linkComponent={AdaptorLink}>
             <AppContent />
           </AppProvider>

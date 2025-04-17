@@ -55,68 +55,63 @@ export const extractNumericId = (input) => {
  */
 export const fetchOrderLimitById = async (input) => {
   try {
-    // Add extra debug logging to see what's coming in
     console.log("fetchOrderLimitById called with input:", input);
     
-    // Extra defensive checks
-    if (input === null || input === undefined) {
+    // If input is invalid, return null instead of making an API call
+    if (input === null || input === undefined || input === "") {
       console.warn("Cannot fetch order limit: Product ID is null or undefined");
       return null;
     }
     
-    // Try to extract/convert the numeric ID
+    // Convert input to a valid numeric ID
     let numericId;
     try {
       numericId = extractNumericId(input);
       console.log(`Successfully extracted numericId=${numericId} from input`);
     } catch (error) {
       console.warn(`Failed to extract numeric ID from input: ${error.message}`);
-      return null; // Return null instead of throwing to avoid error banner
-    }
-    
-    if (!numericId) {
-      console.warn("Extracted numericId is falsy, cannot proceed");
       return null;
     }
     
-    console.log(`Attempting API call with productId=${numericId}`);
+    // Double check that we have a valid numeric ID
+    if (!numericId || isNaN(numericId) || numericId <= 0) {
+      console.warn(`Invalid numericId: ${numericId}`);
+      return null;
+    }
     
-    // Attempt to fetch the order limit with the numeric ID
+    console.log(`Calling API with productId=${numericId}`);
+    
     try {
-      const response = await api.fetchOrderLimitByProductId({productId: numericId});
+      const response = await api.fetchOrderLimitByProductId({
+        productId: numericId
+      });
       
+      // Handle null response
       if (!response) {
-        console.log(`No existing OrderLimit for productId=${numericId}. Returning null.`);
+        console.log(`No order limit found for productId=${numericId}`);
         return null;
       }
       
-      console.log(`Fetched Order Limit for productId ${numericId}:`, response);
+      console.log(`Fetched order limit:`, response);
       return response;
     } catch (error) {
-      // If the API call itself fails, handle it here
-      if (error.message && error.message.includes("Invalid product ID")) {
-        console.warn(`API reported invalid product ID: ${error.message}`);
-        return null; // Return null for invalid ID errors
+      // Specific handling for "not found" errors
+      if (error?.message?.includes("not found") || 
+          error?.message?.includes("Invalid product ID") ||
+          error?.message?.includes("No limits found")) {
+        console.log(`Expected error (product limit not found): ${error.message}`);
+        return null;
       }
       
-      throw error; // Rethrow other API errors
+      // For other errors, rethrow
+      throw error;
     }
   } catch (error) {
-    // Check if this is a "not found" error, which is expected
-    if (error.message && (
-      error.message.includes("No limits found") || 
-      error.message.includes("not found") ||
-      error.message.includes("Invalid product ID")
-    )) {
-      console.log(`Expected error (treating as "not found"): ${error.message}`);
-      return null;
-    }
-    
-    // Log and rethrow other errors
-    console.error(`Error fetching Order Limit: ${error.message}`);
-    throw new Error(`Failed to fetch order limit: ${error.message}`);
+    console.error(`Error in fetchOrderLimitById: ${error.message}`);
+    return null; // Return null for all errors to avoid UI disruption
   }
 };
+
 
 
 /**
@@ -128,6 +123,7 @@ export const saveOrderLimit = async (data) => {
   try {
     const processedData = { ...data };
 
+    // Process numeric productId
     if (processedData.productId) {
       if (typeof processedData.productId === "string" && processedData.productId.startsWith("gid://")) {
         processedData.productId = extractNumericId(processedData.productId);
@@ -141,7 +137,10 @@ export const saveOrderLimit = async (data) => {
       processedData.productName = processedData.productTitle;
     }
 
-    console.log("Saving order limit with data:", processedData);
+    // DO NOT add shop._link - we will pass shopId directly to the global action
+    // The global action will handle the conversion to shop._link format
+
+    console.log("Saving order limit with processed data:", processedData);
 
     const result = await api.saveOrderLimit(processedData);
     console.log("Save order limit result:", result);
@@ -158,6 +157,9 @@ export const saveOrderLimit = async (data) => {
     throw new Error(`Failed to save order limit: ${error.message || "Unknown error"}`);
   }
 };
+
+
+
 
 /**
  * Fetch all order limits with product details

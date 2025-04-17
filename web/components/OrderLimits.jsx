@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Card, TextField, Button, DataTable, Banner, Spinner, Box, Text } from "@shopify/polaris";
 import { fetchOrderLimitById, saveOrderLimit, extractNumericId } from "../utils/orderLimitUtils";
+import { api } from "../api"; // Add this import
 
 const OrderLimits = ({ selectedProduct }) => {
   const [minLimit, setMinLimit] = useState(0);
@@ -17,104 +18,140 @@ const OrderLimits = ({ selectedProduct }) => {
     setMinLimit(0);
     setMaxLimit(0);
     
-    // Only attempt to fetch if we have a valid product
-    if (selectedProduct && selectedProduct.id) {
-      try {
-        const numericId = extractNumericId(selectedProduct.id);
-        setProductIdDisplay(numericId.toString());
-        // Only try to fetch after we've confirmed the ID is valid
-        handleFetchOrderLimit(numericId);
-      } catch (error) {
-        console.error("Error extracting numeric product ID:", error);
-        setProductIdDisplay("Invalid ID");
+    // Only attempt to fetch if we have a valid product with an ID
+    if (!selectedProduct) {
+      console.log("No selected product");
+      return;
+    }
+    
+    if (!selectedProduct.id) {
+      console.log("Selected product has no ID");
+      return;
+    }
+    
+    try {
+      console.log("Processing product:", selectedProduct);
+      const numericId = extractNumericId(selectedProduct.id);
+      
+      if (!numericId || isNaN(numericId) || numericId <= 0) {
+        console.error("Invalid numeric ID:", numericId);
         setStatusMessage({
-          content: `Invalid product ID: ${error.message}`,
+          content: "Invalid product ID",
           status: "error"
         });
+        return;
       }
-    } else {
-      // Reset state when no product is selected
-      setProductIdDisplay("");
-      console.log("No product selected or product ID is missing");
+      
+      setProductIdDisplay(numericId.toString());
+      handleFetchOrderLimit(numericId);
+    } catch (error) {
+      console.error("Error extracting product ID:", error);
+      setProductIdDisplay("Invalid ID");
+      setStatusMessage({
+        content: `Invalid product ID: ${error.message}`,
+        status: "error"
+      });
     }
   }, [selectedProduct]);
+  
 
-  const handleSaveLimits = async () => {
-    if (!selectedProduct || !selectedProduct.id) {
-      setStatusMessage({
-        content: "No product selected. Please select a product first.",
-        status: "error"
-      });
-      return;
+  // Find the handleSaveLimits function and update it to include shop ID
+// In OrderLimits.jsx - update the handleSaveLimits function:
+
+const handleSaveLimits = async () => {
+  if (!selectedProduct || !selectedProduct.id) {
+    setStatusMessage({
+      content: "No product selected. Please select a product first.",
+      status: "error"
+    });
+    return;
+  }
+
+  // Validate input values
+  const minLimitNum = parseInt(minLimit);
+  const maxLimitNum = parseInt(maxLimit);
+
+  if (isNaN(minLimitNum) || minLimitNum < 0) {
+    setStatusMessage({
+      content: "Minimum limit must be a non-negative number.",
+      status: "error"
+    });
+    return;
+  }
+
+  if (isNaN(maxLimitNum) || maxLimitNum <= 0) {
+    setStatusMessage({
+      content: "Maximum limit must be a positive number.",
+      status: "error"
+    });
+    return;
+  }
+
+  if (maxLimitNum < minLimitNum) {
+    setStatusMessage({
+      content: "Maximum limit cannot be less than minimum limit.",
+      status: "error"
+    });
+    return;
+  }
+
+  setLoading(true);
+  setStatusMessage({ content: "", status: "" });
+
+  try {
+    // Get the current shop ID
+    const shopSessionResponse = await api.getShopSession();
+    console.log("Shop session response:", shopSessionResponse);
+    
+    if (!shopSessionResponse?.authenticated || !shopSessionResponse?.shopId) {
+      throw new Error("Could not determine current shop. Please refresh and try again.");
     }
-
-    // Validate input values
-    const minLimitNum = parseInt(minLimit);
-    const maxLimitNum = parseInt(maxLimit);
-
-    if (isNaN(minLimitNum) || minLimitNum < 0) {
-      setStatusMessage({
-        content: "Minimum limit must be a non-negative number.",
-        status: "error"
-      });
-      return;
-    }
-
-    if (isNaN(maxLimitNum) || maxLimitNum <= 0) {
-      setStatusMessage({
-        content: "Maximum limit must be a positive number.",
-        status: "error"
-      });
-      return;
-    }
-
-    if (maxLimitNum < minLimitNum) {
-      setStatusMessage({
-        content: "Maximum limit cannot be less than minimum limit.",
-        status: "error"
-      });
-      return;
-    }
-
-    setLoading(true);
-    setStatusMessage({ content: "", status: "" });
-
+    
+    // Get the numeric product ID
+    let numericProductId;
     try {
-      // Get the numeric product ID
-      let numericProductId;
-      try {
-        numericProductId = extractNumericId(selectedProduct.id);
-      } catch (error) {
-        throw new Error(`Invalid product ID: ${error.message}`);
-      }
-      
-      const data = {
-        productId: numericProductId,
-        minLimit: minLimitNum,
-        maxLimit: maxLimitNum,
-        productName: selectedProduct.title || `Product ${numericProductId}`, // Fallback for missing title
-      };
-      
-      console.log("Saving order limit with data:", data);
-      const result = await saveOrderLimit(data);
-      
-      setStatusMessage({
-        content: `Order limits saved successfully for ${selectedProduct.title}.`,
-        status: "success"
-      });
-      
-      // Refresh the displayed data with the known numeric ID
-      await handleFetchOrderLimit(numericProductId);
+      numericProductId = extractNumericId(selectedProduct.id);
     } catch (error) {
-      setStatusMessage({
-        content: `Error saving order limits: ${error.message || "Unknown error"}`,
-        status: "error"
-      });
-      console.error("Error saving order limits:", error);
-    } finally {
-      setLoading(false);
+      throw new Error(`Invalid product ID: ${error.message}`);
     }
-  };
+    
+    // Send the data to the saveOrderLimit function
+    // Just pass shopId - the global action will handle the conversion
+    const data = {
+      productId: numericProductId,
+      minLimit: minLimitNum,
+      maxLimit: maxLimitNum,
+      productName: selectedProduct.title || `Product ${numericProductId}`,
+      shopId: shopSessionResponse.shopId
+    };
+    
+    console.log("Saving order limit with data:", data);
+    
+    const result = await saveOrderLimit(data);
+    console.log("Save result:", result);
+    
+    setStatusMessage({
+      content: `Order limits saved successfully for ${selectedProduct.title}.`,
+      status: "success"
+    });
+    
+    // Refresh the displayed data
+    await handleFetchOrderLimit(numericProductId);
+  } catch (error) {
+    console.error("Error saving order limits:", error);
+    setStatusMessage({
+      content: `Error saving order limits: ${error.message || "Unknown error"}`,
+      status: "error"
+    });
+  } finally {
+    setLoading(false);
+  }
+};
+
+
+
+
+
 
 // In OrderLimits.jsx - update the handleFetchOrderLimit function:
 
@@ -163,10 +200,11 @@ const handleFetchOrderLimit = async (providedNumericId = null) => {
       }
     }
     
-    if (!numericProductId) {
-      console.error("numericProductId is falsy after extraction attempts");
+    // CRITICAL FIX: Additional validation for numericProductId
+    if (!numericProductId || isNaN(numericProductId) || numericProductId <= 0) {
+      console.error(`Invalid numericProductId: ${numericProductId}`);
       setStatusMessage({
-        content: "Could not determine product ID",
+        content: "Invalid product ID. Please select a valid product.",
         status: "error"
       });
       setFetchLoading(false);
@@ -203,6 +241,7 @@ const handleFetchOrderLimit = async (providedNumericId = null) => {
     setFetchLoading(false);
   }
 };
+
 
 // Helper function to handle the response from fetchOrderLimitById
 const handleOrderLimitResponse = (orderLimit) => {

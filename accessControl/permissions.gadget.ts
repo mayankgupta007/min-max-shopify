@@ -145,8 +145,13 @@ export const permissions: GadgetPermissions = {
       },
       actions: {
         ensureScriptTagRegistered: true,
+        fetchOrderLimitByProductId: true,
+        getProductLimits: true,
+        getShopSession: true,
         manualRegisterScriptTag: true,
+        migrateProductIdsToNumbers: true,
         registerScriptTag: true,
+        saveOrderLimit: true,
         scheduledShopifySync: true,
         testOrderLimitSetup: true,
       },
@@ -164,8 +169,16 @@ export const permissions: GadgetPermissions = {
         },
       },
       actions: {
+        ensureScriptTagRegistered: true,
         fetchOrderLimitByProductId: true,
+        getProductLimits: true,
+        getShopSession: true,
+        manualRegisterScriptTag: true,
+        migrateProductIdsToNumbers: true,
+        registerScriptTag: true,
         saveOrderLimit: true,
+        scheduledShopifySync: true,
+        testOrderLimitSetup: true,
       },
     },
     PostMan: {
@@ -278,6 +291,7 @@ export const permissions: GadgetPermissions = {
       },
       actions: {
         ensureScriptTagRegistered: true,
+        getShopSession: true,
         manualRegisterScriptTag: true,
         registerScriptTag: true,
         scheduledShopifySync: true,

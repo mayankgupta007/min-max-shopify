@@ -23,5 +23,11 @@ export const schema: GadgetModel = {
       storageKey: "TybEu3mAIE-o",
     },
     productName: { type: "string", storageKey: "9fp3tnyB6xo5" },
+    shop: {
+      type: "belongsTo",
+      validations: { required: true },
+      parent: { model: "shopifyShop" },
+      storageKey: "Q619mHp-U82Y",
+    },
   },
 };

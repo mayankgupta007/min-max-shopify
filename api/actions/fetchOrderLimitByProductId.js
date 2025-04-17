@@ -1,6 +1,6 @@
 // api/actions/fetchOrderLimitByProductId.js
 
-export const run = async ({ params, logger, api, connections }) => {
+export const run = async ({ params, logger, api, connections, session }) => {
   try {
     // Ensure productId is a number
     const productId = typeof params.productId === 'string' 
@@ -12,12 +12,22 @@ export const run = async ({ params, logger, api, connections }) => {
       throw new Error(`Invalid product ID: ${params.productId}`);
     }
     
-    logger.info(`Searching for OrderLimit with productId: ${productId}`);
+    // Get the current shop ID for tenant isolation
+    const shopId = session?.shop?.id || connections.shopify?.currentShopId;
+    if (!shopId) {
+      logger.warn("No shop ID available in session or connections");
+      throw new Error("Shop not authenticated");
+    }
     
-    // Use the API to search for an OrderLimit with the matching productId
+    logger.info(`Searching for OrderLimit with productId: ${productId} for shop: ${shopId}`);
+    
+    // Use the API to search for an OrderLimit with the matching productId AND shop
     const orderLimit = await api.OrderLimit.maybeFindFirst({
       filter: {
-        productId: { equals: productId }
+        AND: [
+          { productId: { equals: productId } },
+          { shopId: { equals: shopId } }
+        ]
       }
     });
     
@@ -31,7 +41,7 @@ export const run = async ({ params, logger, api, connections }) => {
         message: "Limits found"
       };
     } else {
-      logger.info(`No OrderLimit found for productId: ${productId}`);
+      logger.info(`No OrderLimit found for productId: ${productId} in shop: ${shopId}`);
       // Return a default object with null values
       return {
         minLimit: null,
