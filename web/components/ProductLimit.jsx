@@ -68,6 +68,16 @@ export default function ProductLimit() {
         onAction: redirectToDashboard
       }}
     >
+      
+      <Layout.Section>
+    <div style={{ marginTop: "-32px", marginBottom: "16px", paddingInline: "0px" }}>
+      <Text as="p" variant="bodyMd" color="subdued">
+            Set order limits for your products to control how many items customers can purchase. 
+            This helps manage inventory, prevent bulk buying, and ensure smooth fulfillment of orders.
+          </Text>
+        </div>
+      </Layout.Section>
+      
       <Layout>
         <Layout.Section>
           <Card sectioned>
