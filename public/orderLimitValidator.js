@@ -611,6 +611,7 @@ function displayCartErrorMessage(message) {
     errorContainer.style.borderRadius = '4px';
     errorContainer.style.border = '1px solid #fadbd7';
     errorContainer.style.fontWeight = 'bold';
+    errorContainer.style.fontSize = '14px';
 
     // Try to insert it near the cart item
     const cartItems = document.querySelectorAll('.cart-item, .cart__item, .cart__row');
@@ -629,13 +630,19 @@ function displayCartErrorMessage(message) {
     }
   }
 
-  errorContainer.textContent = message;
+  // Create a more eye-catching message with an icon
+  errorContainer.innerHTML = `
+    <div style="display: flex; align-items: center;">
+      <div style="margin-right: 10px; font-size: 20px;">⚠️</div>
+      <div>${message}</div>
+    </div>
+  `;
   errorContainer.style.display = 'block';
 
-  // Auto-hide after 5 seconds
+  // Auto-hide after 8 seconds (increased from 5)
   setTimeout(() => {
     errorContainer.style.display = 'none';
-  }, 5000);
+  }, 8000);
 }
 
   // Function to find all checkout buttons
@@ -848,27 +855,34 @@ function validateTotalQuantity(newQuantity, limits) {
     totalQuantity: totalQuantity,
     minLimit: limits.minLimit,
     maxLimit: limits.maxLimit,
-    message: message
+    message: message,
+    productName: limits.productName || null,
+    productId: limits.productId || null
   };
   
   return lastValidationResult;
 }
 
 
-  // ADD this new helper function to generate appropriate messages
-  function getLimitMessage(quantity, limits) {
-    if (!limits) return null;
+// ADD this new helper function to generate appropriate messages
+function getLimitMessage(quantity, limits) {
+  if (!limits) return null;
 
-    if (limits.minLimit && quantity < limits.minLimit) {
-      return `Minimum order quantity is ${limits.minLimit}. You currently have ${quantity} in your cart.`;
-    }
+  // Include product name in the message if available
+  const productIdentifier = limits.productName ? 
+    `"${limits.productName}"` : 
+    `Product #${limits.productId}`;
 
-    if (limits.maxLimit && quantity > limits.maxLimit) {
-      return `Maximum order quantity is ${limits.maxLimit}. You currently have ${quantity} in your cart.`;
-    }
-
-    return null;
+  if (limits.minLimit && quantity < limits.minLimit) {
+    return `${productIdentifier}: Minimum order quantity is ${limits.minLimit}. You currently have ${quantity} in your cart.`;
   }
+
+  if (limits.maxLimit && quantity > limits.maxLimit) {
+    return `${productIdentifier}: Maximum order quantity is ${limits.maxLimit}. You currently have ${quantity} in your cart.`;
+  }
+
+  return null;
+}
 
 
 
@@ -881,6 +895,7 @@ function validateTotalQuantity(newQuantity, limits) {
   // Public/orderLimitValidator.js - Update only the fetchOrderLimits function
 
   // Modify only the fetchOrderLimits function in your orderLimitValidator.js
+// Replace the existing fetchOrderLimits function with this version
 // Replace the existing fetchOrderLimits function with this version
 async function fetchOrderLimits(productId) {
   try {
@@ -932,6 +947,19 @@ async function fetchOrderLimits(productId) {
               // Add timestamp for cache control
               data.timestamp = Date.now();
               
+              // Try to get product name if not available
+              if (!data.productName && productId) {
+                try {
+                  // Try to find the product name in the page
+                  const productName = findProductNameInPage(productId);
+                  if (productName) {
+                    data.productName = productName;
+                  }
+                } catch (e) {
+                  // Ignore errors finding product name
+                }
+              }
+              
               // Cache the limits in sessionStorage
               try {
                 sessionStorage.setItem(cachedLimitsKey, JSON.stringify(data));
@@ -957,6 +985,70 @@ async function fetchOrderLimits(productId) {
     return null;
   } catch (error) {
     console.error('Fetch error in fetchOrderLimits:', error);
+    return null;
+  }
+}
+
+// New helper function to find product name in the page
+function findProductNameInPage(productId) {
+  try {
+    // Try to find product name in various places on the page
+    
+    // 1. Check meta tags first
+    const productNameMeta = document.querySelector('meta[property="og:title"]');
+    if (productNameMeta && productNameMeta.content && productNameMeta.content.trim()) {
+      return productNameMeta.content.trim();
+    }
+    
+    // 2. Check product JSON
+    const productJson = document.getElementById('ProductJson-product-template');
+    if (productJson && productJson.textContent) {
+      try {
+        const data = JSON.parse(productJson.textContent);
+        if (data && data.title) {
+          return data.title;
+        }
+      } catch(e) {
+        // Ignore parse errors
+      }
+    }
+    
+    // 3. Check common product title elements
+    const productTitleSelectors = [
+      '.product-title',
+      '.product__title',
+      '.product-single__title',
+      'h1.product-single__title',
+      '.product-meta h1',
+      'h1[itemprop="name"]',
+      '.product_name'
+    ];
+    
+    for (const selector of productTitleSelectors) {
+      const element = document.querySelector(selector);
+      if (element && element.textContent && element.textContent.trim()) {
+        return element.textContent.trim();
+      }
+    }
+    
+    // 4. Check cart page items
+    const cartItems = document.querySelectorAll('.cart-item, .cart__item, .cart__row');
+    for (const item of cartItems) {
+      const itemIdElement = item.querySelector('[data-product-id], [data-id]');
+      const itemId = itemIdElement && (itemIdElement.dataset.productId || itemIdElement.dataset.id);
+      
+      if (itemId == productId) {
+        const titleElement = item.querySelector('.cart-item__name, .cart__product-name, .product-name, .cart-item-title');
+        if (titleElement && titleElement.textContent.trim()) {
+          return titleElement.textContent.trim();
+        }
+      }
+    }
+    
+    // No product name found
+    return null;
+  } catch (error) {
+    console.error('Error finding product name:', error);
     return null;
   }
 }
@@ -1315,6 +1407,105 @@ async function fetchOrderLimits(productId) {
     }); // Small delay to ensure elements are loaded
   }
 
+  function highlightCartItemsWithLimits() {
+  if (!productLimits || !productLimits.productId) return;
+  
+  try {
+    // Find cart items
+    const cartItems = document.querySelectorAll('.cart-item, .cart__item, .cart__row, [data-cart-item]');
+    
+    for (const item of cartItems) {
+      // Try to get the product ID for this cart item
+      let itemProductId = item.dataset.productId || item.dataset.id;
+      
+      // If no data attribute, try to find it in child elements
+      if (!itemProductId) {
+        const idElement = item.querySelector('[data-product-id], [data-id], [id^="CartItem-"]');
+        if (idElement) {
+          itemProductId = idElement.dataset.productId || idElement.dataset.id;
+        }
+        
+        // Try to extract from input name
+        if (!itemProductId) {
+          const qtyInput = item.querySelector('input[name^="updates["]');
+          if (qtyInput) {
+            const match = qtyInput.name.match(/updates\[(\d+)\]/);
+            if (match && match[1]) {
+              itemProductId = match[1];
+            }
+          }
+        }
+      }
+      
+      // If we found a product ID that matches our limit ID
+      if (itemProductId && String(itemProductId) === String(productLimits.productId)) {
+        debugLog(`Found cart item with limited product ID: ${itemProductId}`);
+        
+        // Add a visual indicator
+        if (!item.querySelector('.order-limit-indicator')) {
+          const indicator = document.createElement('div');
+          indicator.className = 'order-limit-indicator';
+          indicator.style.backgroundColor = '#fff8f8';
+          indicator.style.border = '1px solid #fadbd7';
+          indicator.style.borderRadius = '3px';
+          indicator.style.padding = '4px 8px';
+          indicator.style.margin = '5px 0';
+          indicator.style.fontSize = '12px';
+          indicator.style.color = '#d14836';
+          
+          // Create message based on limits
+          let message = 'Order limits apply:';
+          if (productLimits.minLimit) message += ` Min: ${productLimits.minLimit}`;
+          if (productLimits.minLimit && productLimits.maxLimit) message += ',';
+          if (productLimits.maxLimit) message += ` Max: ${productLimits.maxLimit}`;
+          
+          indicator.textContent = message;
+          
+          // Find a good place to insert it
+          const qtyWrapper = item.querySelector('.cart__qty, .quantity-selector, .cart-item__quantity');
+          if (qtyWrapper) {
+            qtyWrapper.appendChild(indicator);
+          } else {
+            // Try to insert after item title
+            const title = item.querySelector('.cart-item__name, .cart__product-name, .product-name');
+            if (title) {
+              title.insertAdjacentElement('afterend', indicator);
+            } else {
+              // Last resort - just append to the item
+              item.appendChild(indicator);
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error highlighting cart items with limits:', error);
+  }
+}
+
+// Call this function when the cart page is loaded
+if (window.location.pathname.includes('/cart')) {
+  // Wait for the cart to be fully loaded
+  setTimeout(highlightCartItemsWithLimits, 500);
+  
+  // Also call it after any cart updates
+  document.addEventListener('cart:updated', highlightCartItemsWithLimits);
+  
+  // Set up a MutationObserver to detect cart changes
+  const cartObserver = new MutationObserver(() => {
+    highlightCartItemsWithLimits();
+  });
+  
+  // Observe the cart container
+  const cartContainer = document.querySelector('.cart, #cart, [data-section-type="cart"], .cart-wrapper');
+  if (cartContainer) {
+    cartObserver.observe(cartContainer, { 
+      childList: true, 
+      subtree: true 
+    });
+  }
+}
+
 // Helper function to enable all checkout buttons
 function enableAllCheckoutButtons() {
   const checkoutButtons = findCheckoutButtons();
@@ -1499,81 +1690,98 @@ function disableCheckoutButtons(buttons, message) {
         disableCheckoutTimer = null;
       }
     }
+
+    // Add to the end of updateCheckoutButtonsState function
+    if (window.location.pathname.includes('/cart')) {
+      setTimeout(highlightCartItemsWithLimits, 100);
+    }
+
   }
   
 
 
   // Function to show limit warning
-  function showLimitWarning(message) {
-    // Try to find an existing warning container
-    let warningContainer = document.querySelector('.order-limit-warning');
+// Function to show limit warning
+function showLimitWarning(message) {
+  // Try to find an existing warning container
+  let warningContainer = document.querySelector('.order-limit-warning');
 
-    if (!warningContainer) {
-      // Create a new warning container
-      warningContainer = document.createElement('div');
-      warningContainer.className = 'order-limit-warning';
-      warningContainer.style.color = '#d14836';
-      warningContainer.style.backgroundColor = '#fff8f8';
-      warningContainer.style.padding = '10px';
-      warningContainer.style.marginTop = '15px';
-      warningContainer.style.marginBottom = '15px';
-      warningContainer.style.borderRadius = '4px';
-      warningContainer.style.border = '1px solid #fadbd7';
-      warningContainer.style.fontSize = '14px';
-      warningContainer.style.fontWeight = 'bold';
+  if (!warningContainer) {
+    // Create a new warning container
+    warningContainer = document.createElement('div');
+    warningContainer.className = 'order-limit-warning';
+    warningContainer.style.color = '#d14836';
+    warningContainer.style.backgroundColor = '#fff8f8';
+    warningContainer.style.padding = '10px';
+    warningContainer.style.marginTop = '15px';
+    warningContainer.style.marginBottom = '15px';
+    warningContainer.style.borderRadius = '4px';
+    warningContainer.style.border = '1px solid #fadbd7';
+    warningContainer.style.fontSize = '14px';
+    warningContainer.style.fontWeight = 'bold';
 
-      // Try to insert it in the cart
-      const cartForms = document.querySelectorAll('form[action="/cart"], form[action="/cart/update"]');
-      let inserted = false;
+    // Try to insert it in the cart
+    const cartForms = document.querySelectorAll('form[action="/cart"], form[action="/cart/update"]');
+    let inserted = false;
 
-      if (cartForms.length > 0) {
-        // Insert before checkout buttons or at the end of the form
-        const form = cartForms[0];
-        const checkoutContainer = form.querySelector('.cart__submit-controls, .cart__buttons-container');
+    if (cartForms.length > 0) {
+      // Insert before checkout buttons or at the end of the form
+      const form = cartForms[0];
+      const checkoutContainer = form.querySelector('.cart__submit-controls, .cart__buttons-container');
 
-        if (checkoutContainer) {
-          checkoutContainer.parentNode.insertBefore(warningContainer, checkoutContainer);
-          inserted = true;
-        } else {
-          form.appendChild(warningContainer);
-          inserted = true;
-        }
-      }
-
-      // If we couldn't find a cart form, try other common cart containers
-      if (!inserted) {
-        const cartContainers = document.querySelectorAll('.cart, #cart, [data-section-type="cart"]');
-        if (cartContainers.length > 0) {
-          const container = cartContainers[0];
-          // Try to find a good placement - before checkout or at the end
-          const checkoutContainer = container.querySelector('.cart__submit-controls, .cart__buttons-container');
-
-          if (checkoutContainer) {
-            checkoutContainer.parentNode.insertBefore(warningContainer, checkoutContainer);
-          } else {
-            container.appendChild(warningContainer);
-          }
-        } else {
-          // Last resort - add to body
-          document.body.appendChild(warningContainer);
-        }
+      if (checkoutContainer) {
+        checkoutContainer.parentNode.insertBefore(warningContainer, checkoutContainer);
+        inserted = true;
+      } else {
+        form.appendChild(warningContainer);
+        inserted = true;
       }
     }
 
-    // Update the warning message
-    warningContainer.innerHTML = `
+    // If we couldn't find a cart form, try other common cart containers
+    if (!inserted) {
+      const cartContainers = document.querySelectorAll('.cart, #cart, [data-section-type="cart"]');
+      if (cartContainers.length > 0) {
+        const container = cartContainers[0];
+        // Try to find a good placement - before checkout or at the end
+        const checkoutContainer = container.querySelector('.cart__submit-controls, .cart__buttons-container');
+
+        if (checkoutContainer) {
+          checkoutContainer.parentNode.insertBefore(warningContainer, checkoutContainer);
+        } else {
+          container.appendChild(warningContainer);
+        }
+      } else {
+        // Last resort - add to body
+        document.body.appendChild(warningContainer);
+      }
+    }
+  }
+
+  // Highlight product name in the message by finding text in quotes or product ID
+  let enhancedMessage = message;
+  const productMatch = message.match(/"([^"]+)"/) || message.match(/Product #(\d+)/);
+  if (productMatch && productMatch[1]) {
+    const productIdentifier = productMatch[1];
+    enhancedMessage = message.replace(
+      productMatch[0], 
+      `<span style="color: #d14836; text-decoration: underline; font-weight: bold;">${productMatch[0]}</span>`
+    );
+  }
+
+  // Update the warning message
+  warningContainer.innerHTML = `
     <div style="display: flex; align-items: center;">
       <div style="margin-right: 10px; font-size: 24px;">⚠️</div>
-      <div>${message}</div>
+      <div>${enhancedMessage}</div>
     </div>
     <div style="margin-top: 5px; font-size: 12px; font-weight: normal;">
       Please adjust your quantities to proceed with checkout.
     </div>
   `;
 
-    warningContainer.style.display = 'block';
-  }
-
+  warningContainer.style.display = 'block';
+}
   // Function to clear limit warning
   function clearLimitWarning() {
     const warningContainer = document.querySelector('.order-limit-warning');
