@@ -55,7 +55,7 @@ export default function Dashboard() {
         </Layout.Section>
         
         {/* Then show the product picker and order limits sections */}
-        <Layout.Section>
+        {/* <Layout.Section>
           <Card sectioned>
             <Text variant="headingMd">Add New Limit</Text>
             <Button onClick={openProductPicker}>
@@ -78,7 +78,7 @@ export default function Dashboard() {
               <OrderLimits selectedProduct={selectedProduct} />
             </Card>
           )}
-        </Layout.Section>
+        </Layout.Section> */}
       </Layout>
     </Page>
   );
