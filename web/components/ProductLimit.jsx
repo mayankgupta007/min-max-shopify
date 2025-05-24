@@ -6,7 +6,9 @@ import {
   Card, 
   Text,
   Button,
-  Box 
+  Box,
+  InlineStack,
+  Banner
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { Redirect, ResourcePicker } from "@shopify/app-bridge/actions";
@@ -60,51 +62,86 @@ export default function ProductLimit() {
     setSelectedProduct(null);
   };
 
+
+  const renderEmptyState = () => {
+    if (!selectedProduct) {
+      return (
+        <Card sectioned>
+          <Box paddingBlockStart="300" paddingBlockEnd="400" textAlign="center">
+            <Text variant="headingMd">No Product Selected</Text>
+            <Box paddingBlockStart="300">
+              <Text variant="bodyMd" color="subdued">
+                Select a product to set ordering limits for your customers. 
+                Limits help ensure customers order within your preferred quantity range.
+              </Text>
+            </Box>
+            <Box paddingBlockStart="400">
+              <Button onClick={openProductPicker} primary size="large">
+                Select a product
+              </Button>
+            </Box>
+          </Box>
+        </Card>
+      );
+    }
+    return null;
+  };
+
   return (
     <Page 
-      title="Product Limit"
+      title="Product Order Limits"
       backAction={{
         content: 'Dashboard',
         onAction: redirectToDashboard
       }}
     >
+      {/* Add description here */}
+      <Box paddingBlockEnd="400">
+        <Text as="p" variant="bodyMd" color="subdued">
+          Control how many items customers can purchase by setting minimum and maximum order quantities.
+          This helps manage inventory and ensures customers order the appropriate amounts.
+        </Text>
+      </Box>
       
-      <Layout.Section>
-    <div style={{ marginTop: "-32px", marginBottom: "16px", paddingInline: "0px" }}>
-      <Text as="p" variant="bodyMd" color="subdued">
-            Set order limits for your products to control how many items customers can purchase. 
-            This helps manage inventory, prevent bulk buying, and ensure smooth fulfillment of orders.
-          </Text>
-        </div>
-      </Layout.Section>
-      
+      {!selectedProduct && (
+  <Box paddingBlockEnd="400">
+    <Banner tone="info" onDismiss={() => {}}>
+      <Text as="p"> 
+        Start by selecting a product, then define minimum and maximum purchase quantities.
+      </Text>
+    </Banner>
+  </Box>
+)}
+
       <Layout>
         <Layout.Section>
-          <Card sectioned>
-            <Text variant="headingMd">Add New Product Limit</Text>
-            <Box paddingBlockStart="300">
-              <Button onClick={openProductPicker} primary>
-                {selectedProduct ? "Change Product" : "Select Product"}
-              </Button>
-              {selectedProduct && (
-                <Box paddingBlockStart="300">
-                  <Button onClick={clearSelection} destructive>
-                    Clear Selection
+          {!selectedProduct ? (
+            renderEmptyState()
+          ) : (
+            <>
+              <Card sectioned>
+                <InlineStack align="space-between">
+                  <Text variant="headingMd">Selected Product</Text>
+                  <Button onClick={openProductPicker} plain>
+                    Change product
+                  </Button>
+                </InlineStack>
+                <Box paddingBlockStart="200">
+                  <Text variant="bodyMd">{selectedProduct.title}</Text>
+                  {/* {selectedProduct.id && (
+                    <Text variant="bodySm" color="subdued">Product ID: {selectedProduct.id}</Text>
+                  )} */}
+                </Box>
+                <Box paddingBlockStart="400">
+                  <OrderLimits selectedProduct={selectedProduct} />
+                </Box>
+                <Box paddingBlockStart="400" textAlign="end">
+                  <Button onClick={clearSelection} plain>
+                    Cancel
                   </Button>
                 </Box>
-              )}
-            </Box>
-          </Card>
-
-          {selectedProduct && (
-            <Card sectioned>
-              <Text variant="headingMd">Selected Product</Text>
-              <Text variant="bodyMd">{selectedProduct.title}</Text>
-              {selectedProduct.id && (
-                <Text variant="bodyMd">Product ID: {selectedProduct.id}</Text>
-              )}
-              <OrderLimits selectedProduct={selectedProduct} />
-            </Card>
+              </Card>
+            </>
           )}
         </Layout.Section>
       </Layout>

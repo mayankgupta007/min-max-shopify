@@ -1,389 +1,163 @@
+// File: web/components/OrderLimits.jsx
 import React, { useState, useEffect } from "react";
-import { Card, TextField, Button, DataTable, Banner, Spinner, Box, Text } from "@shopify/polaris";
-import { fetchOrderLimitById, saveOrderLimit, extractNumericId } from "../utils/orderLimitUtils";
-import { api } from "../api"; // Add this import
+import { 
+  BlockStack,
+  TextField,
+  Button, 
+  Text, 
+  Box,
+  Banner,
+  Spinner
+} from "@shopify/polaris";
+import { api } from "../api";
 
-const OrderLimits = ({ selectedProduct }) => {
-  const [minLimit, setMinLimit] = useState(0);
-  const [maxLimit, setMaxLimit] = useState(0);
-  const [limits, setLimits] = useState([]);
+export default function OrderLimits({ selectedProduct }) {
+  const [minLimit, setMinLimit] = useState("");
+  const [maxLimit, setMaxLimit] = useState("");
   const [loading, setLoading] = useState(false);
-  const [fetchLoading, setFetchLoading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState({ content: "", status: "" });
-  const [productIdDisplay, setProductIdDisplay] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState(null);
+  const [isNewLimit, setIsNewLimit] = useState(true); // New state to track if this is a new limit
 
+  // Fetch existing limits when product changes
   useEffect(() => {
-    // Reset state when switching products
-    setLimits([]);
-    setMinLimit(0);
-    setMaxLimit(0);
-    
-    // Only attempt to fetch if we have a valid product with an ID
-    if (!selectedProduct) {
-      console.log("No selected product");
-      return;
-    }
-    
-    if (!selectedProduct.id) {
-      console.log("Selected product has no ID");
-      return;
-    }
-    
-    try {
-      console.log("Processing product:", selectedProduct);
-      const numericId = extractNumericId(selectedProduct.id);
+    const fetchLimits = async () => {
+      if (!selectedProduct?.id) return;
       
-      if (!numericId || isNaN(numericId) || numericId <= 0) {
-        console.error("Invalid numeric ID:", numericId);
-        setStatusMessage({
-          content: "Invalid product ID",
-          status: "error"
-        });
-        return;
-      }
+      setLoading(true);
+      setError(null); // Clear any previous errors
+      setIsNewLimit(true); // Assume it's new until we find otherwise
       
-      setProductIdDisplay(numericId.toString());
-      handleFetchOrderLimit(numericId);
-    } catch (error) {
-      console.error("Error extracting product ID:", error);
-      setProductIdDisplay("Invalid ID");
-      setStatusMessage({
-        content: `Invalid product ID: ${error.message}`,
-        status: "error"
-      });
-    }
-  }, [selectedProduct]);
-  
-
-  // Find the handleSaveLimits function and update it to include shop ID
-// In OrderLimits.jsx - update the handleSaveLimits function:
-
-const handleSaveLimits = async () => {
-  if (!selectedProduct || !selectedProduct.id) {
-    setStatusMessage({
-      content: "No product selected. Please select a product first.",
-      status: "error"
-    });
-    return;
-  }
-
-  // Validate input values
-  const minLimitNum = parseInt(minLimit);
-  const maxLimitNum = parseInt(maxLimit);
-
-  if (isNaN(minLimitNum) || minLimitNum < 0) {
-    setStatusMessage({
-      content: "Minimum limit must be a non-negative number.",
-      status: "error"
-    });
-    return;
-  }
-
-  if (isNaN(maxLimitNum) || maxLimitNum <= 0) {
-    setStatusMessage({
-      content: "Maximum limit must be a positive number.",
-      status: "error"
-    });
-    return;
-  }
-
-  if (maxLimitNum < minLimitNum) {
-    setStatusMessage({
-      content: "Maximum limit cannot be less than minimum limit.",
-      status: "error"
-    });
-    return;
-  }
-
-  setLoading(true);
-  setStatusMessage({ content: "", status: "" });
-
-  try {
-    // Get the shop domain from URL
-    const currentShopDomain = new URLSearchParams(window.location.search).get('shop');
-    console.log("Current shop domain from URL:", currentShopDomain);
-    
-    // Get the current shop ID using the domain from URL
-    const shopSessionResponse = await api.getShopSession({
-      shopDomain: currentShopDomain
-    });
-    console.log("Shop session response:", shopSessionResponse);
-    
-    if (!shopSessionResponse?.authenticated || !shopSessionResponse?.shopId) {
-      throw new Error("Could not determine current shop. Please refresh and try again.");
-    }
-    
-    // Verify shop domain matches
-    if (shopSessionResponse.shopDomain !== currentShopDomain) {
-      console.warn(`Shop domain mismatch! URL: ${currentShopDomain}, Response: ${shopSessionResponse.shopDomain}`);
-    }
-    
-    // Get the numeric product ID
-    let numericProductId;
-    try {
-      numericProductId = extractNumericId(selectedProduct.id);
-    } catch (error) {
-      throw new Error(`Invalid product ID: ${error.message}`);
-    }
-    
-    // Send the data to the saveOrderLimit function
-    const data = {
-      productId: numericProductId,
-      minLimit: minLimitNum,
-      maxLimit: maxLimitNum,
-      productName: selectedProduct.title || `Product ${numericProductId}`,
-      shopId: shopSessionResponse.shopId
-    };
-    
-    console.log("Saving order limit with data:", data);
-    
-    const result = await saveOrderLimit(data);
-    console.log("Save result:", result);
-    
-    setStatusMessage({
-      content: `Order limits saved successfully for ${selectedProduct.title}.`,
-      status: "success"
-    });
-    
-    // Refresh the displayed data
-    await handleFetchOrderLimit(numericProductId);
-  } catch (error) {
-    console.error("Error saving order limits:", error);
-    setStatusMessage({
-      content: `Error saving order limits: ${error.message || "Unknown error"}`,
-      status: "error"
-    });
-  } finally {
-    setLoading(false);
-  }
-};
-
-
-
-
-
-
-
-// In OrderLimits.jsx - update the handleFetchOrderLimit function:
-
-const handleFetchOrderLimit = async (providedNumericId = null) => {
-  // First check if we have a selected product
-  if (!selectedProduct) {
-    console.log("No selectedProduct object, skipping fetch");
-    return;
-  }
-  
-  // Debug what's in the selectedProduct
-  console.log("selectedProduct in handleFetchOrderLimit:", 
-    JSON.stringify({
-      id: selectedProduct.id,
-      title: selectedProduct.title,
-      type: typeof selectedProduct.id
-    })
-  );
-  
-  // Check for null/undefined ID or empty string
-  if (!selectedProduct.id || selectedProduct.id === "") {
-    console.log("selectedProduct has null/undefined/empty ID, skipping fetch");
-    return;
-  }
-  
-  setFetchLoading(true);
-  setStatusMessage({ content: "", status: "" });
-
-  try {
-    // Get the shop domain from URL
-    const currentShopDomain = new URLSearchParams(window.location.search).get('shop');
-    console.log("Current shop domain from URL:", currentShopDomain);
-    
-    // Ensure we're using the correct shop ID
-    const shopSessionResponse = await api.getShopSession({
-      shopDomain: currentShopDomain
-    });
-    console.log("Shop session for fetch:", shopSessionResponse);
-    
-    if (!shopSessionResponse?.authenticated || !shopSessionResponse?.shopId) {
-      throw new Error("Could not determine current shop. Please refresh and try again.");
-    }
-    
-    let numericProductId = providedNumericId;
-    
-    // If numeric ID wasn't provided, extract it
-    if (!numericProductId) {
       try {
-        console.log(`Attempting to extract ID from: ${selectedProduct.id}`);
-        numericProductId = extractNumericId(selectedProduct.id);
-        console.log(`Successfully extracted numericProductId: ${numericProductId}`);
-      } catch (error) {
-        console.error("Failed to extract product ID:", error);
-        setStatusMessage({
-          content: `Cannot parse product ID: ${error.message}`,
-          status: "error"
-        });
-        setFetchLoading(false);
-        return; // Exit early
+        // Extract the numeric ID from the Shopify ID format
+        const productId = String(selectedProduct.id).split("/").pop();
+        const response = await api.fetchOrderLimitByProductId({productId});
+        
+        if (response.success && response.data) {
+          // We found existing data
+          setMinLimit(response.data.minLimit?.toString() || "");
+          setMaxLimit(response.data.maxLimit?.toString() || "");
+          setIsNewLimit(false); // This is an existing limit
+        } else {
+          // No existing limits - this is normal and expected for new products
+          setMinLimit("");
+          setMaxLimit("");
+          // Don't set an error - this is a valid state
+        }
+      } catch (err) {
+        console.error("Error fetching limits:", err);
+        // Only set error for network/server issues, not for "not found"
+        if (err.message && !err.message.includes("not found")) {
+          setError("There was an error connecting to the server. Please try again.");
+        }
+      } finally {
+        setLoading(false);
       }
+    };
+
+    fetchLimits();
+  }, [selectedProduct]);
+
+  const handleSave = async () => {
+    // Extract the numeric ID from the Shopify ID format
+    const productId = String(selectedProduct.id).split("/").pop();
+    const minLimitNum = minLimit ? parseInt(minLimit, 10) : null;
+    const maxLimitNum = maxLimit ? parseInt(maxLimit, 10) : null;
+    
+    // Validation
+    if (minLimitNum && maxLimitNum && minLimitNum > maxLimitNum) {
+      setError("Minimum limit cannot be greater than maximum limit");
+      return;
     }
     
-    // CRITICAL FIX: Additional validation for numericProductId
-    if (!numericProductId || isNaN(numericProductId) || numericProductId <= 0) {
-      console.error(`Invalid numericProductId: ${numericProductId}`);
-      setStatusMessage({
-        content: "Invalid product ID. Please select a valid product.",
-        status: "error"
-      });
-      setFetchLoading(false);
-      return; // Exit early
-    }
+    setSaving(true);
+    setError(null);
     
-    console.log("About to call fetchOrderLimitById with:", numericProductId);
-    // Add a try/catch specifically around the fetchOrderLimitById call
     try {
-      // Pass the shop ID to the fetch function
-      const orderLimit = await fetchOrderLimitById(numericProductId, shopSessionResponse.shopId);
-      handleOrderLimitResponse(orderLimit);
-    } catch (error) {
-      console.error("Error from fetchOrderLimitById:", error);
-      setStatusMessage({
-        content: `Error fetching limit: ${error.message}`,
-        status: "error"
+      await api.saveOrderLimit({
+        productId,
+        productName: selectedProduct.title,
+        minLimit: minLimitNum,
+        maxLimit: maxLimitNum
       });
+      
+      setSuccess(true);
+      setIsNewLimit(false); // After saving, it's no longer a new limit
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (err) {
+      console.error("Error saving limits:", err);
+      setError("Failed to save limits. Please try again.");
+    } finally {
+      setSaving(false);
     }
-  } catch (error) {
-    // This catch block handles other errors in the function
-    console.error("General error in handleFetchOrderLimit:", error);
-    
-    // Don't show error message for "no limits found" since that's expected
-    if (error.message && error.message.includes("No limits found")) {
-      console.log("No limits found for this product (expected)");
-      setLimits([]);
-    } else {
-      setStatusMessage({
-        content: `Error: ${error.message || "Unknown error"}`,
-        status: "error"
-      });
-    }
-  } finally {
-    setFetchLoading(false);
+  };
+
+  if (loading) {
+    return (
+      <Box padding="400" textAlign="center">
+        <BlockStack gap="300" align="center">
+          <Spinner />
+          <Text>Loading product limits...</Text>
+        </BlockStack>
+      </Box>
+    );
   }
-};
-
-
-
-// Helper function to handle the response from fetchOrderLimitById
-const handleOrderLimitResponse = (orderLimit) => {
-  // If orderLimit is null, it means the fetch completed but no limit exists
-  if (orderLimit === null) {
-    console.log("No order limit found for this product");
-    setLimits([]);
-    // Keep the form fields at their default values
-    return;
-  }
-  
-  // Check if it's a real order limit or our default "not found" object
-  if (orderLimit && orderLimit.id) {
-    // This is a real order limit record
-    setLimits([orderLimit]);
-    setMinLimit(orderLimit.minLimit || 0);
-    setMaxLimit(orderLimit.maxLimit || 0);
-  } else if (orderLimit && orderLimit.message === "No limits found for this product") {
-    // This is our default "not found" response
-    console.log("No limits found message received");
-    setLimits([]);
-    // Keep default form values
-  } else {
-    // Any other response
-    setLimits(orderLimit ? [orderLimit] : []);
-    if (orderLimit) {
-      setMinLimit(orderLimit.minLimit || 0);
-      setMaxLimit(orderLimit.maxLimit || 0);
-    }
-  }
-};
-
 
   return (
-    <Card title="Set Order Limits">
-      {selectedProduct ? (
-        <Box padding="400">
-          {productIdDisplay && (
-            <Box paddingBlockEnd="300">
-              <Text as="p" variant="bodyMd">
-                Product ID: <strong>{productIdDisplay}</strong>
-              </Text>
-            </Box>
-          )}
-          
-          {statusMessage.content && (
-            <Box paddingBlockEnd="400">
-              <Banner status={statusMessage.status}>
-                {statusMessage.content}
-              </Banner>
-            </Box>
-          )}
-          
-          {fetchLoading ? (
-            <Box padding="400" textAlign="center">
-              <Spinner accessibilityLabel="Loading order limits" />
-            </Box>
-          ) : (
-            <>
-              <TextField
-                label="Minimum Order Limit"
-                type="number"
-                value={minLimit}
-                onChange={setMinLimit}
-                autoComplete="off"
-                min={0}
-                helpText="The minimum quantity that must be ordered (0 means no minimum)"
-              />
-              <Box paddingBlockStart="300" paddingBlockEnd="300">
-                <TextField
-                  label="Maximum Order Limit"
-                  type="number"
-                  value={maxLimit}
-                  onChange={setMaxLimit}
-                  autoComplete="off"
-                  min={1}
-                  helpText="The maximum quantity that can be ordered"
-                />
-              </Box>
-              
-              <Box paddingBlockStart="300">
-                <Button 
-                  onClick={handleSaveLimits} 
-                  variant="primary" 
-                  loading={loading} 
-                  disabled={loading || fetchLoading}
-                >
-                  Save Limits
-                </Button>
-              </Box>
-
-              {limits.length > 0 && (
-                <Box paddingBlockStart="500">
-                  <Text as="h3" variant="headingMd">Current Limits</Text>
-                  <DataTable
-                    columnContentTypes={['text', 'numeric', 'numeric']}
-                    headings={['Product ID', 'Min Limit', 'Max Limit']}
-                    rows={limits.map((limit) => [
-                      limit.productId !== undefined ? String(limit.productId) : 'N/A',
-                      limit.minLimit !== undefined ? limit.minLimit : 'N/A',
-                      limit.maxLimit !== undefined ? limit.maxLimit : 'N/A'
-                    ])}
-                  />
-                </Box>
-              )}
-            </>
-          )}
-        </Box>
-      ) : (
-        <Box padding="400">
-          <Banner status="info">Please select a product to set order limits.</Banner>
-        </Box>
+    <BlockStack gap="400">
+      <Text variant="headingMd">Order Quantity Limits</Text>
+      
+      {/* Show appropriate messaging based on whether this is a new limit or not */}
+      {isNewLimit && !error && (
+        <Banner tone="info" onDismiss={() => setIsNewLimit(false)}>
+          No order limits exist yet for this product. Set minimum and maximum quantities below.
+        </Banner>
       )}
-    </Card>
-  );
-};
+      
+      {/* Show error only if there's a real error */}
+      {error && (
+        <Banner tone="critical" onDismiss={() => setError(null)}>
+          {error}
+        </Banner>
+      )}
+      
+      {success && (
+        <Banner tone="success" onDismiss={() => setSuccess(false)}>
+          Order limits saved successfully!
+        </Banner>
+      )}
 
-export default OrderLimits;
+      <BlockStack gap="400">
+        <TextField
+          label="Minimum quantity"
+          type="number"
+          value={minLimit}
+          onChange={setMinLimit}
+          autoComplete="off"
+          helpText="The minimum quantity a customer must add to their cart. Leave blank for no minimum."
+        />
+        
+        <TextField
+          label="Maximum quantity"
+          type="number"
+          value={maxLimit}
+          onChange={setMaxLimit}
+          autoComplete="off"
+          helpText="The maximum quantity a customer can add to their cart. Leave blank for no maximum."
+        />
+      </BlockStack>
+
+      <Box paddingBlockStart="200">
+        <Button 
+          onClick={handleSave} 
+          primary 
+          loading={saving}
+          disabled={loading || saving}
+        >
+          {isNewLimit ? "Create limits" : "Update limits"}
+        </Button>
+      </Box>
+    </BlockStack>
+  );
+}
