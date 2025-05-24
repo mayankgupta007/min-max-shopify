@@ -7,6 +7,10 @@ let pendingValidation = false;
 let validationComplete = false;
 let lastValidationResult = null;
 
+// NEW: Track multiple product limits instead of a single one
+let productLimitsMap = {}; // Object to store limits for multiple products: { productId: limitData }
+let currentCartContents = []; // Array of cart items with product IDs and quantities
+
 // ALTERNATIVE CSP-FRIENDLY CONSOLE FIX
 (function() {
   try {
@@ -553,6 +557,329 @@ function getValidationState() {
   }
 
 
+/**
+ * Fetches order limits for multiple products in the cart
+ * @returns {Promise<Object>} Map of product IDs to their limit data
+ */
+async function fetchAllProductLimits() {
+  debugLog('Fetching limits for all products in cart');
+  
+  try {
+    // Get current cart contents first
+    await checkCurrentCart();
+    
+    // Don't do anything if cart is empty
+    if (!currentCartContents || currentCartContents.length === 0) {
+      debugLog('Cart is empty, no need to fetch limits');
+      return {};
+    }
+    
+    // Get a list of unique product IDs in the cart
+    const uniqueProductIds = [...new Set(currentCartContents.map(item => String(item.product_id)))];
+    debugLog(`Found ${uniqueProductIds.length} unique products in cart`, uniqueProductIds);
+    
+    // IMPORTANT: First check if we already have limits for these products in memory
+    // This prevents losing limits if the server temporarily returns bad data
+    const existingLimits = {};
+    let existingLimitCount = 0;
+    
+    for (const productId of uniqueProductIds) {
+      if (productLimitsMap && productLimitsMap[productId]) {
+        existingLimits[productId] = productLimitsMap[productId];
+        existingLimitCount++;
+      }
+    }
+    
+    if (existingLimitCount > 0) {
+      debugLog(`Using ${existingLimitCount} existing product limits from memory`);
+    }
+    
+    // Batch fetch all product limits - create promises for each product
+    const timestamp = new Date().getTime();
+    const shopParam = window.Shopify?.shop || window.location.hostname;
+    
+    // Use a Map to track which products we've already requested
+    const requestedProducts = new Map();
+    const limitPromises = [];
+    
+    for (const productId of uniqueProductIds) {
+      // Skip if we've already requested this product
+      if (requestedProducts.has(productId)) continue;
+      requestedProducts.set(productId, true);
+      
+      // Create promise to fetch this product's limits
+      const limitPromise = (async () => {
+        try {
+          // First try local storage cache
+          const cachedLimitsKey = `orderLimits_${productId}`;
+          let cachedLimits = null;
+          
+          try {
+            const cachedLimitsStr = sessionStorage.getItem(cachedLimitsKey);
+            if (cachedLimitsStr) {
+              const parsed = JSON.parse(cachedLimitsStr);
+              // Use cached limits if they're not too old (5 minutes)
+              if (parsed && parsed.timestamp && (Date.now() - parsed.timestamp < 300000)) {
+                cachedLimits = parsed;
+                debugLog(`Using cached limits for product ${productId}:`, cachedLimits);
+              }
+            }
+          } catch (cacheError) {
+            console.warn('Error accessing cached limits:', cacheError);
+          }
+          
+          if (cachedLimits) {
+            return { productId, limits: cachedLimits };
+          }
+          
+          // Try both URL formats for better compatibility
+          const urls = [
+            `${APP_PROXY_PATH}/product-limits/${productId}?shop=${shopParam}&t=${timestamp}`,
+            `${APP_PROXY_PATH}?path=product-limits-${productId}&shop=${shopParam}&t=${timestamp}`
+          ];
+          
+          for (const url of urls) {
+            const response = await fetch(url, {
+              headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+              }
+            });
+            
+            if (response.ok) {
+              const contentType = response.headers.get('content-type');
+              if (contentType && contentType.includes('application/json')) {
+                try {
+                  const data = await response.json();
+                  if (data && (data.minLimit !== undefined || data.maxLimit !== undefined)) {
+                    // Add timestamp and product ID (in case it's missing)
+                    data.timestamp = Date.now();
+                    data.productId = data.productId || productId;
+                    
+                    // Cache the result
+                    try {
+                      sessionStorage.setItem(cachedLimitsKey, JSON.stringify(data));
+                    } catch (storageError) {
+                      // Ignore storage errors
+                    }
+                    
+                    return { productId, limits: data };
+                  }
+                } catch (jsonError) {
+                  debugLog(`Error parsing JSON for product ${productId}:`, jsonError);
+                  continue; // Try next URL
+                }
+              } else {
+                // If we got HTML or other non-JSON response, try to extract limits
+                try {
+                  const text = await response.text();
+                  // Try to find limit info in the HTML
+                  const minMatch = text.match(/minimum.*?(\d+)/i);
+                  const maxMatch = text.match(/maximum.*?(\d+)/i);
+                  
+                  if (minMatch || maxMatch) {
+                    const extractedLimit = {
+                      productId: productId,
+                      timestamp: Date.now()
+                    };
+                    
+                    if (minMatch && minMatch[1]) {
+                      extractedLimit.minLimit = parseInt(minMatch[1], 10);
+                    }
+                    
+                    if (maxMatch && maxMatch[1]) {
+                      extractedLimit.maxLimit = parseInt(maxMatch[1], 10);
+                    }
+                    
+                    // Extract product name if possible
+                    const nameMatch = text.match(/<title>(.*?)<\/title>/);
+                    if (nameMatch && nameMatch[1]) {
+                      extractedLimit.productName = nameMatch[1].trim();
+                    }
+                    
+                    debugLog(`Extracted limit info from HTML for product ${productId}:`, extractedLimit);
+                    return { productId, limits: extractedLimit };
+                  }
+                } catch (textError) {
+                  debugLog(`Error extracting text from response for product ${productId}:`, textError);
+                }
+              }
+            }
+          }
+          
+          // If we got here, both URLs failed, use existing limits if available
+          if (existingLimits[productId]) {
+            debugLog(`Using existing limits for product ${productId} after fetch failed`);
+            return { productId, limits: existingLimits[productId] };
+          }
+          
+          return { productId, limits: null };
+        } catch (error) {
+          debugLog(`Error fetching limits for product ${productId}:`, error);
+          
+          // Use existing limits if available
+          if (existingLimits[productId]) {
+            debugLog(`Using existing limits for product ${productId} after error`);
+            return { productId, limits: existingLimits[productId] };
+          }
+          
+          return { productId, limits: null };
+        }
+      })();
+      
+      limitPromises.push(limitPromise);
+    }
+    
+    // Wait for all promises to resolve with a timeout
+    const results = await Promise.all(limitPromises);
+    
+    // Convert results to a map of product ID -> limits
+    const limitsMap = { ...existingLimits }; // Start with existing limits
+    let newLimitCount = 0;
+    
+    for (const result of results) {
+      if (result.limits) {
+        limitsMap[result.productId] = result.limits;
+        if (!existingLimits[result.productId]) {
+          newLimitCount++;
+        }
+      }
+    }
+    
+    // If we didn't get any new limits but have existing ones, use those
+    if (newLimitCount === 0 && existingLimitCount > 0) {
+      debugLog(`No new limits found, continuing to use ${existingLimitCount} existing limits`);
+    } else if (Object.keys(limitsMap).length > 0) {
+      const limitSummary = Object.entries(limitsMap).map(([id, limit]) => 
+        `Product ${id}: min=${limit.minLimit || 'N/A'}, max=${limit.maxLimit || 'N/A'}`
+      ).join('; ');
+      
+      debugLog(`Fetched limits for ${Object.keys(limitsMap).length} products: ${limitSummary}`);
+    } else {
+      debugLog('No product limits were found in cart');
+    }
+    
+    return limitsMap;
+  } catch (error) {
+    console.error('Error fetching all product limits:', error);
+    
+    // Return existing limits if we have them - don't lose limits due to an error
+    if (productLimitsMap && Object.keys(productLimitsMap).length > 0) {
+      debugLog('Returning existing limits due to error');
+      return productLimitsMap;
+    }
+    
+    return {};
+  }
+}
+
+
+/**
+ * Validates all products in the cart against their limits
+ * @returns {Object} Validation results with any limit violations
+ */
+function validateAllProducts() {
+  // Skip if we don't have cart contents or limits
+  if (!currentCartContents || currentCartContents.length === 0) {
+    debugLog('No cart contents to validate');
+    return { 
+      valid: true, 
+      violations: [],
+      anyLimitsExceeded: false 
+    };
+  }
+  
+  if (!productLimitsMap || Object.keys(productLimitsMap).length === 0) {
+    debugLog('No product limits to validate against');
+    return { 
+      valid: true, 
+      violations: [],
+      anyLimitsExceeded: false 
+    };
+  }
+  
+  // Track all violations
+  const violations = [];
+  
+  debugLog('Validating all products in cart against limits');
+  
+  // First check all cart items with known limits
+  for (const item of currentCartContents) {
+    const productId = String(item.product_id);
+    const limits = productLimitsMap[productId];
+    
+    // Skip if no limits for this product
+    if (!limits) continue;
+    
+    debugLog(`Checking product ${productId} (${item.product_title || 'Unknown'}) against limits:`, limits);
+    
+    const quantity = item.totalProductQuantity || item.quantity;
+    
+    // Check min limit
+    if (limits.minLimit && quantity < limits.minLimit) {
+      debugLog(`Product ${productId} violates min limit: ${quantity} < ${limits.minLimit}`);
+      violations.push({
+        productId,
+        productTitle: item.product_title || limits.productName || `Product ${productId}`,
+        type: 'min',
+        current: quantity,
+        required: limits.minLimit,
+        message: `${item.product_title || limits.productName || `Product ${productId}`}: Minimum order quantity is ${limits.minLimit}. You currently have ${quantity} in your cart.`
+      });
+    }
+    
+    // Check max limit
+    if (limits.maxLimit && quantity > limits.maxLimit) {
+      debugLog(`Product ${productId} violates max limit: ${quantity} > ${limits.maxLimit}`);
+      violations.push({
+        productId,
+        productTitle: item.product_title || limits.productName || `Product ${productId}`,
+        type: 'max',
+        current: quantity,
+        limit: limits.maxLimit,
+        message: `${item.product_title || limits.productName || `Product ${productId}`}: Maximum order quantity is ${limits.maxLimit}. You currently have ${quantity} in your cart.`
+      });
+    }
+  }
+  
+  // Also check limits that might not be in the cart yet
+  // This handles cases where a product has a min limit but isn't in the cart
+  for (const [limitProductId, limits] of Object.entries(productLimitsMap)) {
+    // Skip if we already checked this product
+    const cartItem = currentCartContents.find(item => String(item.product_id) === limitProductId);
+    if (cartItem) continue;
+    
+    // Check if this product has a min limit but isn't in cart
+    if (limits.minLimit && limits.minLimit > 0) {
+      debugLog(`Product ${limitProductId} has min limit ${limits.minLimit} but is not in cart`);
+      violations.push({
+        productId: limitProductId,
+        productTitle: limits.productName || `Product ${limitProductId}`,
+        type: 'min',
+        current: 0,
+        required: limits.minLimit,
+        message: `${limits.productName || `Product ${limitProductId}`}: Minimum order quantity is ${limits.minLimit}. You currently have 0 in your cart.`
+      });
+    }
+  }
+  
+  const anyLimitsExceeded = violations.length > 0;
+  
+  debugLog(`Validation complete. Found ${violations.length} violations. Valid: ${!anyLimitsExceeded}`);
+  for (const violation of violations) {
+    debugLog(`Violation: ${violation.message}`);
+  }
+  
+  return {
+    valid: !anyLimitsExceeded,
+    violations,
+    anyLimitsExceeded,
+    message: violations.length > 0 ? 
+      violations.map(v => v.message).join('\n') :
+      null
+  };
+}
+
   // This is a more comprehensive fix for orderLimitValidator.js
 
   // Save the original fetch at the beginning of the file
@@ -564,36 +891,65 @@ function getValidationState() {
   let currentCartQuantity = 0;
 
   // Function to check the current cart
-  async function checkCurrentCart() {
-    try {
-      const response = await fetch('/cart.js', {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        cache: 'no-store'
-      });
-  
-      if (response.ok) {
-        const cart = await response.json();
-        const productId = getProductId();
-        if (!productId) return 0;
-  
-        // Optimize this loop for speed
-        let quantity = 0;
-        for (let i = 0; i < cart.items.length; i++) {
-          if (cart.items[i].product_id == productId) {
-            quantity += cart.items[i].quantity;
-          }
+  /**
+ * Checks the current cart contents and updates global state
+ * @returns {Promise<number>} Total items in cart
+ */
+/**
+ * Checks the current cart contents and updates global state
+ * @returns {Promise<number>} Total items in cart
+ */
+async function checkCurrentCart() {
+  try {
+    const response = await fetch('/cart.js', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store'
+    });
+
+    if (response.ok) {
+      const cart = await response.json();
+      
+      // Store the entire cart contents for limit validation
+      currentCartContents = cart.items || [];
+      
+      // Track total quantity for each product ID
+      const productQuantities = {};
+      
+      // Calculate quantities per product
+      for (const item of currentCartContents) {
+        // Ensure product_id is stored as a string for consistent comparisons
+        item.product_id = String(item.product_id);
+        
+        if (!productQuantities[item.product_id]) {
+          productQuantities[item.product_id] = 0;
         }
-  
-        currentCartQuantity = quantity;
-        return quantity;
+        productQuantities[item.product_id] += item.quantity;
       }
-      return 0;
-    } catch (error) {
-      console.error("Error checking cart:", error);
-      return 0;
+      
+      // Store quantities in each cart item for easier access
+      for (const item of currentCartContents) {
+        item.totalProductQuantity = productQuantities[item.product_id];
+      }
+      
+      debugLog('Updated cart contents:', currentCartContents);
+      
+      // For backward compatibility with old code
+      const productId = getProductId(); // Current product page
+      if (productId) {
+        currentCartQuantity = productQuantities[productId] || 0;
+      } else {
+        currentCartQuantity = 0;
+      }
+      
+      return cart.item_count || 0;
     }
+    return 0;
+  } catch (error) {
+    console.error("Error checking cart:", error);
+    return 0;
   }
+}
   
 // Add this missing function
 function displayCartErrorMessage(message) {
@@ -611,6 +967,7 @@ function displayCartErrorMessage(message) {
     errorContainer.style.borderRadius = '4px';
     errorContainer.style.border = '1px solid #fadbd7';
     errorContainer.style.fontWeight = 'bold';
+    errorContainer.style.fontSize = '14px';
 
     // Try to insert it near the cart item
     const cartItems = document.querySelectorAll('.cart-item, .cart__item, .cart__row');
@@ -629,13 +986,19 @@ function displayCartErrorMessage(message) {
     }
   }
 
-  errorContainer.textContent = message;
+  // Create a more eye-catching message with an icon
+  errorContainer.innerHTML = `
+    <div style="display: flex; align-items: center;">
+      <div style="margin-right: 10px; font-size: 20px;">⚠️</div>
+      <div>${message}</div>
+    </div>
+  `;
   errorContainer.style.display = 'block';
 
-  // Auto-hide after 5 seconds
+  // Auto-hide after 8 seconds (increased from 5)
   setTimeout(() => {
     errorContainer.style.display = 'none';
-  }, 5000);
+  }, 8000);
 }
 
   // Function to find all checkout buttons
@@ -848,27 +1211,34 @@ function validateTotalQuantity(newQuantity, limits) {
     totalQuantity: totalQuantity,
     minLimit: limits.minLimit,
     maxLimit: limits.maxLimit,
-    message: message
+    message: message,
+    productName: limits.productName || null,
+    productId: limits.productId || null
   };
   
   return lastValidationResult;
 }
 
 
-  // ADD this new helper function to generate appropriate messages
-  function getLimitMessage(quantity, limits) {
-    if (!limits) return null;
+// ADD this new helper function to generate appropriate messages
+function getLimitMessage(quantity, limits) {
+  if (!limits) return null;
 
-    if (limits.minLimit && quantity < limits.minLimit) {
-      return `Minimum order quantity is ${limits.minLimit}. You currently have ${quantity} in your cart.`;
-    }
+  // Include product name in the message if available
+  const productIdentifier = limits.productName ? 
+    `"${limits.productName}"` : 
+    `Product #${limits.productId}`;
 
-    if (limits.maxLimit && quantity > limits.maxLimit) {
-      return `Maximum order quantity is ${limits.maxLimit}. You currently have ${quantity} in your cart.`;
-    }
-
-    return null;
+  if (limits.minLimit && quantity < limits.minLimit) {
+    return `${productIdentifier}: Minimum order quantity is ${limits.minLimit}. You currently have ${quantity} in your cart.`;
   }
+
+  if (limits.maxLimit && quantity > limits.maxLimit) {
+    return `${productIdentifier}: Maximum order quantity is ${limits.maxLimit}. You currently have ${quantity} in your cart.`;
+  }
+
+  return null;
+}
 
 
 
@@ -881,6 +1251,7 @@ function validateTotalQuantity(newQuantity, limits) {
   // Public/orderLimitValidator.js - Update only the fetchOrderLimits function
 
   // Modify only the fetchOrderLimits function in your orderLimitValidator.js
+// Replace the existing fetchOrderLimits function with this version
 // Replace the existing fetchOrderLimits function with this version
 async function fetchOrderLimits(productId) {
   try {
@@ -932,6 +1303,19 @@ async function fetchOrderLimits(productId) {
               // Add timestamp for cache control
               data.timestamp = Date.now();
               
+              // Try to get product name if not available
+              if (!data.productName && productId) {
+                try {
+                  // Try to find the product name in the page
+                  const productName = findProductNameInPage(productId);
+                  if (productName) {
+                    data.productName = productName;
+                  }
+                } catch (e) {
+                  // Ignore errors finding product name
+                }
+              }
+              
               // Cache the limits in sessionStorage
               try {
                 sessionStorage.setItem(cachedLimitsKey, JSON.stringify(data));
@@ -957,6 +1341,70 @@ async function fetchOrderLimits(productId) {
     return null;
   } catch (error) {
     console.error('Fetch error in fetchOrderLimits:', error);
+    return null;
+  }
+}
+
+// New helper function to find product name in the page
+function findProductNameInPage(productId) {
+  try {
+    // Try to find product name in various places on the page
+    
+    // 1. Check meta tags first
+    const productNameMeta = document.querySelector('meta[property="og:title"]');
+    if (productNameMeta && productNameMeta.content && productNameMeta.content.trim()) {
+      return productNameMeta.content.trim();
+    }
+    
+    // 2. Check product JSON
+    const productJson = document.getElementById('ProductJson-product-template');
+    if (productJson && productJson.textContent) {
+      try {
+        const data = JSON.parse(productJson.textContent);
+        if (data && data.title) {
+          return data.title;
+        }
+      } catch(e) {
+        // Ignore parse errors
+      }
+    }
+    
+    // 3. Check common product title elements
+    const productTitleSelectors = [
+      '.product-title',
+      '.product__title',
+      '.product-single__title',
+      'h1.product-single__title',
+      '.product-meta h1',
+      'h1[itemprop="name"]',
+      '.product_name'
+    ];
+    
+    for (const selector of productTitleSelectors) {
+      const element = document.querySelector(selector);
+      if (element && element.textContent && element.textContent.trim()) {
+        return element.textContent.trim();
+      }
+    }
+    
+    // 4. Check cart page items
+    const cartItems = document.querySelectorAll('.cart-item, .cart__item, .cart__row');
+    for (const item of cartItems) {
+      const itemIdElement = item.querySelector('[data-product-id], [data-id]');
+      const itemId = itemIdElement && (itemIdElement.dataset.productId || itemIdElement.dataset.id);
+      
+      if (itemId == productId) {
+        const titleElement = item.querySelector('.cart-item__name, .cart__product-name, .product-name, .cart-item-title');
+        if (titleElement && titleElement.textContent.trim()) {
+          return titleElement.textContent.trim();
+        }
+      }
+    }
+    
+    // No product name found
+    return null;
+  } catch (error) {
+    console.error('Error finding product name:', error);
     return null;
   }
 }
@@ -1161,6 +1609,7 @@ async function fetchOrderLimits(productId) {
     }
 
     // Function to intercept direct input changes
+    // Inside setupCartPageInterception - update the interceptQuantityInputs function:
     function interceptQuantityInputs() {
       const inputs = findCartQuantityInputs();
 
@@ -1179,37 +1628,50 @@ async function fetchOrderLimits(productId) {
             if (!cartItem) return;
 
             // Try to extract the product ID from the cart item
-            // This is tricky as different themes store it differently
-            let itemProductId = null;
+            let itemProductId = cartItem.dataset.productId || cartItem.dataset.id;
 
-            // Try data attribute
-            itemProductId = cartItem.dataset.productId || cartItem.dataset.id;
-
-            // Try URL in a link
+            // If no ID in dataset, try other methods
             if (!itemProductId) {
-              const productLink = cartItem.querySelector('a[href*="/products/"]');
-              if (productLink) {
-                const productUrl = productLink.getAttribute('href');
-                // Extract the handle and query the page
-                // This is approximate as we can't reliably get the product ID from the handle
-                debugLog('Found product URL:', productUrl);
+              const idElement = cartItem.querySelector('[data-product-id], [data-id]');
+              if (idElement) {
+                itemProductId = idElement.dataset.productId || idElement.dataset.id;
+              }
+              
+              // Try to extract from input name
+              if (!itemProductId) {
+                const match = this.name.match(/updates\[(\d+)\]/);
+                if (match && match[1]) {
+                  itemProductId = match[1];
+                }
+              }
+              
+              // Try to find in line item properties
+              if (!itemProductId) {
+                const lineItemElement = cartItem.querySelector('[data-line-item-key]');
+                if (lineItemElement) {
+                  const lineItemKey = lineItemElement.dataset.lineItemKey;
+                  const matches = lineItemKey.match(/(\d+):/);
+                  if (matches && matches[1]) {
+                    itemProductId = matches[1];
+                  }
+                }
               }
             }
 
-            debugLog('Cart item product ID:', itemProductId, 'Monitoring product ID:', productId);
+            // Check if this product has limits
+            if (itemProductId && productLimitsMap[itemProductId]) {
+              const limits = productLimitsMap[itemProductId];
+              
+              debugLog(`Validating cart quantity change for ${itemProductId}: ${newValue}, max: ${limits?.maxLimit}`);
 
-            // If this is our monitored product (or we couldn't determine), validate
-            if (!itemProductId || itemProductId === productId) {
-              debugLog(`Validating cart quantity change: ${newValue}, max: ${productLimits?.maxLimit}`);
-
-              if (productLimits && newValue > productLimits.maxLimit) {
-                console.warn(`Prevented quantity change: ${newValue} exceeds max ${productLimits.maxLimit}`);
+              if (limits && limits.maxLimit && newValue > limits.maxLimit) {
+                console.warn(`Prevented quantity change: ${newValue} exceeds max ${limits.maxLimit}`);
 
                 // Reset the input value to last valid value
                 this.value = this.dataset.lastValidValue;
 
                 // Show error message
-                displayCartErrorMessage(`Maximum order quantity is ${productLimits.maxLimit}`);
+                displayCartErrorMessage(`${limits.productName || 'Product ' + itemProductId}: Maximum order quantity is ${limits.maxLimit}`);
 
                 // Prevent default and stop propagation
                 e.preventDefault();
@@ -1313,7 +1775,181 @@ async function fetchOrderLimits(productId) {
         observer.observe(cartContainer, { childList: true, subtree: true });
       }
     }); // Small delay to ensure elements are loaded
+
+    if (productLimitsMap && Object.keys(productLimitsMap).length > 0) {
+      // If we already have limits data when this function runs, highlight affected items
+      setTimeout(highlightCartItemsWithLimits, 300);
+      
+      // Also check validation and update buttons
+      setTimeout(() => {
+        const validationResult = validateAllProducts();
+        updateCheckoutButtonsState(validationResult);
+      }, 400);
+    }
   }
+
+/**
+ * Highlights cart items that have order limits applied
+ */
+/**
+ * Highlights cart items that have order limits applied
+ */
+function highlightCartItemsWithLimits() {
+  // Skip if we don't have any limits
+  if (!productLimitsMap || Object.keys(productLimitsMap).length === 0) return;
+  
+  try {
+    debugLog('Highlighting cart items with limits, active limits:', productLimitsMap);
+    
+    // Find cart items
+    const cartItems = document.querySelectorAll('.cart-item, .cart__item, .cart__row, [data-cart-item]');
+    debugLog(`Found ${cartItems.length} cart items to check for highlighting`);
+    
+    // Count of items we've highlighted
+    let highlightedCount = 0;
+    
+    for (const item of cartItems) {
+      // Try to get the product ID for this cart item
+      let itemProductId = item.dataset.productId || item.dataset.id;
+      
+      // If no data attribute, try to find it in child elements
+      if (!itemProductId) {
+        const idElement = item.querySelector('[data-product-id], [data-id], [id^="CartItem-"]');
+        if (idElement) {
+          itemProductId = idElement.dataset.productId || idElement.dataset.id;
+        }
+        
+        // Try to extract from input name
+        if (!itemProductId) {
+          const qtyInput = item.querySelector('input[name^="updates["]');
+          if (qtyInput) {
+            const match = qtyInput.name.match(/updates\[(\d+)\]/);
+            if (match && match[1]) {
+              itemProductId = match[1];
+            }
+          }
+        }
+        
+        // Try one more method - look for variant ID and convert to product ID
+        if (!itemProductId) {
+          // Look for variant ID in the cart item
+          const variantElement = item.querySelector('[data-variant-id]');
+          if (variantElement && variantElement.dataset.variantId) {
+            // Find this variant in our cart contents to get its product ID
+            const variantId = variantElement.dataset.variantId;
+            const cartItem = currentCartContents.find(i => String(i.variant_id) === String(variantId));
+            if (cartItem) {
+              itemProductId = String(cartItem.product_id);
+            }
+          }
+        }
+      }
+      
+      // Convert to string to ensure consistent comparison
+      if (itemProductId) itemProductId = String(itemProductId);
+      
+      // If we found a product ID that has limits
+      if (itemProductId && productLimitsMap[itemProductId]) {
+        const limits = productLimitsMap[itemProductId];
+        debugLog(`Found cart item with limited product ID: ${itemProductId}`, limits);
+        highlightedCount++;
+        
+        // Find any existing indicators and remove them
+        const existingIndicators = item.querySelectorAll('.order-limit-indicator');
+        existingIndicators.forEach(el => el.remove());
+        
+        // Add a visual indicator
+        const indicator = document.createElement('div');
+        indicator.className = 'order-limit-indicator';
+        indicator.style.backgroundColor = '#fff8f8';
+        indicator.style.border = '1px solid #fadbd7';
+        indicator.style.borderRadius = '3px';
+        indicator.style.padding = '4px 8px';
+        indicator.style.margin = '5px 0';
+        indicator.style.fontSize = '12px';
+        indicator.style.fontWeight = 'bold';
+        
+        // Check if this item exceeds its limits
+        const cartItem = currentCartContents.find(i => String(i.product_id) === itemProductId);
+        const quantity = cartItem ? (cartItem.totalProductQuantity || cartItem.quantity) : 0;
+        
+        const minViolation = limits.minLimit && quantity < limits.minLimit;
+        const maxViolation = limits.maxLimit && quantity > limits.maxLimit;
+        
+        // Style based on violation
+        if (minViolation || maxViolation) {
+          indicator.style.color = '#d14836';
+          indicator.style.backgroundColor = '#ffebeb';
+          indicator.style.borderColor = '#f5c2c7';
+        } else {
+          indicator.style.color = '#0c831f';
+          indicator.style.backgroundColor = '#ecf7ed';
+          indicator.style.borderColor = '#d1e7dd';
+        }
+        
+        // Create message based on limits
+        let message = 'Order limits:';
+        if (limits.minLimit) {
+          const minClass = minViolation ? 'style="color: #d14836; font-weight: bold;"' : '';
+          message += ` <span ${minClass}>Min: ${limits.minLimit}</span>`;
+        }
+        if (limits.minLimit && limits.maxLimit) message += ',';
+        if (limits.maxLimit) {
+          const maxClass = maxViolation ? 'style="color: #d14836; font-weight: bold;"' : '';
+          message += ` <span ${maxClass}>Max: ${limits.maxLimit}</span>`;
+        }
+        
+        // Add current quantity
+        message += ` (Current: ${quantity})`;
+        
+        indicator.innerHTML = message;
+        
+        // Find a good place to insert it
+        const qtyWrapper = item.querySelector('.cart__qty, .quantity-selector, .cart-item__quantity');
+        if (qtyWrapper) {
+          qtyWrapper.appendChild(indicator);
+        } else {
+          // Try to insert after item title
+          const title = item.querySelector('.cart-item__name, .cart__product-name, .product-name');
+          if (title) {
+            title.insertAdjacentElement('afterend', indicator);
+          } else {
+            // Last resort - just append to the item
+            item.appendChild(indicator);
+          }
+        }
+      }
+    }
+    
+    debugLog(`Highlighted ${highlightedCount} cart items with limits`);
+  } catch (error) {
+    console.error('Error highlighting cart items with limits:', error);
+  }
+}
+
+
+// Call this function when the cart page is loaded
+if (window.location.pathname.includes('/cart')) {
+  // Wait for the cart to be fully loaded
+  setTimeout(highlightCartItemsWithLimits, 500);
+  
+  // Also call it after any cart updates
+  document.addEventListener('cart:updated', highlightCartItemsWithLimits);
+  
+  // Set up a MutationObserver to detect cart changes
+  const cartObserver = new MutationObserver(() => {
+    highlightCartItemsWithLimits();
+  });
+  
+  // Observe the cart container
+  const cartContainer = document.querySelector('.cart, #cart, [data-section-type="cart"], .cart-wrapper');
+  if (cartContainer) {
+    cartObserver.observe(cartContainer, { 
+      childList: true, 
+      subtree: true 
+    });
+  }
+}
 
 // Helper function to enable all checkout buttons
 function enableAllCheckoutButtons() {
@@ -1430,149 +2066,206 @@ function disableCheckoutButtons(buttons, message) {
 
 
 
-  // ADD these new functions
-  // Function to update all checkout buttons based on current cart state
-  async function updateCheckoutButtonsState() {
-    // Don't re-check cart if this is the initial page load validation
-    if (!document.querySelector('.limit-initial-disabled')) {
-      await checkCurrentCart();
-    } else {
-      // Remove the initial disabled class since we're processing for real now
-      document.querySelectorAll('.limit-initial-disabled').forEach(button => {
-        button.classList.remove('limit-initial-disabled');
-      });
+/**
+ * Updates checkout button states based on validation results
+ * @param {Object} validationResult Optional validation result to use
+ */
+async function updateCheckoutButtonsState(validationResult = null) {
+  // Record time of this update
+  const now = Date.now();
+  if (now - lastButtonStateUpdate < BUTTON_UPDATE_COOLDOWN) {
+    // If we've updated recently, schedule another update
+    if (!pendingValidation) {
+      pendingValidation = true;
+      setTimeout(() => {
+        pendingValidation = false;
+        updateCheckoutButtonsState();
+      }, BUTTON_UPDATE_COOLDOWN);
     }
-  
-    // Record time of this update
-    const now = Date.now();
-    if (now - lastButtonStateUpdate < BUTTON_UPDATE_COOLDOWN) {
-      // If we've updated recently, schedule another update
-      if (!pendingValidation) {
-        pendingValidation = true;
-        setTimeout(() => {
-          pendingValidation = false;
-          updateCheckoutButtonsState();
-        }, BUTTON_UPDATE_COOLDOWN);
-      }
-      return; // Skip this update
-    }
-    
-    lastButtonStateUpdate = now;
-    
-    try {
-      if (!productLimits) {
-        // If we don't have limits, keep buttons disabled as a safety measure
-        debugLog('No product limits available, allowing checkout to proceed');
-        const checkoutButtons = findCheckoutButtons();
-        enableCheckoutButtons(checkoutButtons);       
-        return;
-      }
-  
-      // Validate the current quantity against limits
-      const validationResult = validateTotalQuantity(0, productLimits);
-      debugLog('Button state update validation result:', validationResult);
-  
-      // Find all checkout buttons
-      const checkoutButtons = findCheckoutButtons();
-      debugLog(`Found ${checkoutButtons.length} checkout buttons for state update`);
-  
-      if (!validationResult.withinLimits) {
-        // Limits not met, ensure buttons stay disabled
-        disableCheckoutButtons(checkoutButtons, validationResult.message);
-      } else {
-        // Limits met, restore buttons to original state
-        enableCheckoutButtons(checkoutButtons);
-      }
-      
-      // Mark validation as complete
-      validationComplete = true;
-    } catch (error) {
-      console.error('Error updating checkout button state:', error);
-      // In case of error, ensure buttons stay disabled as a safety measure
-    } finally {
-      // Mark validation as complete
-      validationComplete = true;
-      
-      // Clear safety timer
-      if (disableCheckoutTimer) {
-        clearTimeout(disableCheckoutTimer);
-        disableCheckoutTimer = null;
-      }
-    }
+    return; // Skip this update
   }
   
-
-
+  lastButtonStateUpdate = now;
+  
+  try {
+    // If no validation result is provided, run validation
+    const result = validationResult || validateAllProducts();
+    debugLog('Updating checkout button states based on validation result:', result);
+    
+    // Find all checkout buttons
+    const checkoutButtons = findCheckoutButtons();
+    debugLog(`Found ${checkoutButtons.length} checkout buttons for state update`);
+    
+    if (result.anyLimitsExceeded) {
+      // At least one product violates its limits
+      debugLog('Violations found, disabling checkout buttons');
+      disableCheckoutButtons(checkoutButtons, result.message);
+      
+      // Save this validation state so we remember between page loads
+      try {
+        const state = {
+          isValid: false,
+          message: result.message,
+          timestamp: Date.now()
+        };
+        sessionStorage.setItem('orderLimitValidation', JSON.stringify(state));
+      } catch (e) {
+        // Ignore storage errors
+      }
+      
+      // If there are multiple violations, make them more readable by showing them in a list
+      if (result.violations.length > 1) {
+        const enhancedMessage = `<div><strong>Order Limit Issues:</strong></div><ul style="margin-top: 5px; padding-left: 20px; text-align: left;">` +
+          result.violations.map(v => `<li>${v.productTitle}: ${v.type === 'min' ? 'Minimum' : 'Maximum'} order quantity is ${v.type === 'min' ? v.required : v.limit}. Currently: ${v.current}.</li>`).join('') +
+          `</ul>`;
+        showLimitWarning(enhancedMessage, true); // Pass true to indicate this is HTML
+      } else if (result.violations.length === 1) {
+        showLimitWarning(result.message);
+      }
+    } else {
+      // Double-check to ensure there are no violations before enabling
+      if (productLimitsMap && Object.keys(productLimitsMap).length > 0) {
+        // Perform one final validation check to be extra sure
+        const secondCheck = validateAllProducts();
+        if (secondCheck.anyLimitsExceeded) {
+          debugLog('Second validation check found violations, keeping buttons disabled');
+          disableCheckoutButtons(checkoutButtons, secondCheck.message);
+          return;
+        }
+      }
+      
+      // All products are within limits
+      debugLog('No violations, enabling checkout buttons');
+      enableCheckoutButtons(checkoutButtons);
+      clearLimitWarning();
+      
+      // Save this validation state
+      try {
+        const state = {
+          isValid: true,
+          timestamp: Date.now()
+        };
+        sessionStorage.setItem('orderLimitValidation', JSON.stringify(state));
+      } catch (e) {
+        // Ignore storage errors
+      }
+    }
+    
+    // Highlight items with limits in the cart
+    if (window.location.pathname.includes('/cart')) {
+      setTimeout(highlightCartItemsWithLimits, 100);
+    }
+  } catch (error) {
+    console.error('Error updating checkout button state:', error);
+    
+    // In case of error, check if we have any known limits
+    // If we do, keep buttons disabled to be safe
+    if (productLimitsMap && Object.keys(productLimitsMap).length > 0) {
+      debugLog('Error during update - keeping buttons disabled to be safe');
+      const checkoutButtons = findCheckoutButtons();
+      disableCheckoutButtons(checkoutButtons, 'Error checking limits - please refresh the page');
+    } else {
+      // No known limits, re-enable buttons to prevent users from getting stuck
+      const checkoutButtons = findCheckoutButtons();
+      enableCheckoutButtons(checkoutButtons);
+    }
+  }
+}
   // Function to show limit warning
-  function showLimitWarning(message) {
-    // Try to find an existing warning container
-    let warningContainer = document.querySelector('.order-limit-warning');
+// Function to show limit warning
+/**
+ * Shows a warning message about order limits
+ * @param {string} message The warning message
+ * @param {boolean} isHtml Whether the message contains HTML
+ */
+function showLimitWarning(message, isHtml = false) {
+  // Try to find an existing warning container
+  let warningContainer = document.querySelector('.order-limit-warning');
 
-    if (!warningContainer) {
-      // Create a new warning container
-      warningContainer = document.createElement('div');
-      warningContainer.className = 'order-limit-warning';
-      warningContainer.style.color = '#d14836';
-      warningContainer.style.backgroundColor = '#fff8f8';
-      warningContainer.style.padding = '10px';
-      warningContainer.style.marginTop = '15px';
-      warningContainer.style.marginBottom = '15px';
-      warningContainer.style.borderRadius = '4px';
-      warningContainer.style.border = '1px solid #fadbd7';
-      warningContainer.style.fontSize = '14px';
-      warningContainer.style.fontWeight = 'bold';
+  if (!warningContainer) {
+    // Create a new warning container
+    warningContainer = document.createElement('div');
+    warningContainer.className = 'order-limit-warning';
+    warningContainer.style.color = '#d14836';
+    warningContainer.style.backgroundColor = '#fff8f8';
+    warningContainer.style.padding = '10px';
+    warningContainer.style.marginTop = '15px';
+    warningContainer.style.marginBottom = '15px';
+    warningContainer.style.borderRadius = '4px';
+    warningContainer.style.border = '1px solid #fadbd7';
+    warningContainer.style.fontSize = '14px';
+    warningContainer.style.fontWeight = 'bold';
 
-      // Try to insert it in the cart
-      const cartForms = document.querySelectorAll('form[action="/cart"], form[action="/cart/update"]');
-      let inserted = false;
+    // Try to insert it in the cart
+    const cartForms = document.querySelectorAll('form[action="/cart"], form[action="/cart/update"]');
+    let inserted = false;
 
-      if (cartForms.length > 0) {
-        // Insert before checkout buttons or at the end of the form
-        const form = cartForms[0];
-        const checkoutContainer = form.querySelector('.cart__submit-controls, .cart__buttons-container');
+    if (cartForms.length > 0) {
+      // Insert before checkout buttons or at the end of the form
+      const form = cartForms[0];
+      const checkoutContainer = form.querySelector('.cart__submit-controls, .cart__buttons-container');
+
+      if (checkoutContainer) {
+        checkoutContainer.parentNode.insertBefore(warningContainer, checkoutContainer);
+        inserted = true;
+      } else {
+        form.appendChild(warningContainer);
+        inserted = true;
+      }
+    }
+
+    // If we couldn't find a cart form, try other common cart containers
+    if (!inserted) {
+      const cartContainers = document.querySelectorAll('.cart, #cart, [data-section-type="cart"]');
+      if (cartContainers.length > 0) {
+        const container = cartContainers[0];
+        // Try to find a good placement - before checkout or at the end
+        const checkoutContainer = container.querySelector('.cart__submit-controls, .cart__buttons-container');
 
         if (checkoutContainer) {
           checkoutContainer.parentNode.insertBefore(warningContainer, checkoutContainer);
-          inserted = true;
         } else {
-          form.appendChild(warningContainer);
-          inserted = true;
+          container.appendChild(warningContainer);
         }
-      }
-
-      // If we couldn't find a cart form, try other common cart containers
-      if (!inserted) {
-        const cartContainers = document.querySelectorAll('.cart, #cart, [data-section-type="cart"]');
-        if (cartContainers.length > 0) {
-          const container = cartContainers[0];
-          // Try to find a good placement - before checkout or at the end
-          const checkoutContainer = container.querySelector('.cart__submit-controls, .cart__buttons-container');
-
-          if (checkoutContainer) {
-            checkoutContainer.parentNode.insertBefore(warningContainer, checkoutContainer);
-          } else {
-            container.appendChild(warningContainer);
-          }
-        } else {
-          // Last resort - add to body
-          document.body.appendChild(warningContainer);
-        }
+      } else {
+        // Last resort - add to body
+        document.body.appendChild(warningContainer);
       }
     }
-
-    // Update the warning message
-    warningContainer.innerHTML = `
-    <div style="display: flex; align-items: center;">
-      <div style="margin-right: 10px; font-size: 24px;">⚠️</div>
-      <div>${message}</div>
-    </div>
-    <div style="margin-top: 5px; font-size: 12px; font-weight: normal;">
-      Please adjust your quantities to proceed with checkout.
-    </div>
-  `;
-
-    warningContainer.style.display = 'block';
   }
+
+  // If isHtml is true, use the message as-is, otherwise enhance it
+  let enhancedMessage = message;
+  
+  if (!isHtml) {
+    // Highlight product name in the message by finding text in quotes or product ID
+    const productMatchRegex = /"([^"]+)"|Product #(\d+)/g;
+    let match;
+    while ((match = productMatchRegex.exec(message)) !== null) {
+      const matchedText = match[0];
+      const productIdentifier = match[1] || match[2];
+      enhancedMessage = enhancedMessage.replace(
+        matchedText, 
+        `<span style="color: #d14836; text-decoration: underline; font-weight: bold;">${matchedText}</span>`
+      );
+    }
+    
+    // Wrap the message in a div with an icon
+    enhancedMessage = `
+      <div style="display: flex; align-items: flex-start;">
+        <div style="margin-right: 10px; font-size: 24px;">⚠️</div>
+        <div>${enhancedMessage}</div>
+      </div>
+      <div style="margin-top: 5px; font-size: 12px; font-weight: normal;">
+        Please adjust your quantities to proceed with checkout.
+      </div>
+    `;
+  }
+
+  // Update the warning message
+  warningContainer.innerHTML = enhancedMessage;
+  warningContainer.style.display = 'block';
+}
 
   // Function to clear limit warning
   function clearLimitWarning() {
@@ -1689,43 +2382,63 @@ function setupQuantityInputObservers() {
   debugLog(`Set up observers on ${quantityInputs.length} quantity inputs and ${quantityButtons.length} quantity buttons`);
 }
 
+/**
+ * Refreshes all product limits and validates the cart periodically
+ */
+function setupPeriodicLimitCheck() {
+  // Check limits every minute to ensure they're up to date
+  setInterval(async () => {
+    // Only run if the page is visible and cart isn't empty
+    if (document.visibilityState === 'visible' && currentCartContents?.length > 0) {
+      debugLog('Performing periodic limit check');
+      try {
+        // Refresh cart contents
+        await checkCurrentCart();
+        
+        // Fetch limits for all products
+        if (currentCartContents.length > 0) {
+          const newLimits = await fetchAllProductLimits();
+          
+          // Check if limits have changed
+          let limitsChanged = false;
+          for (const [productId, limitData] of Object.entries(newLimits)) {
+            if (!productLimitsMap[productId] || 
+                productLimitsMap[productId].minLimit !== limitData.minLimit ||
+                productLimitsMap[productId].maxLimit !== limitData.maxLimit) {
+              limitsChanged = true;
+              break;
+            }
+          }
+          
+          // If limits changed, update our map and validate
+          if (limitsChanged) {
+            debugLog('Product limits have changed, updating');
+            productLimitsMap = { ...productLimitsMap, ...newLimits };
+            const validationResult = validateAllProducts();
+            updateCheckoutButtonsState(validationResult);
+            highlightCartItemsWithLimits();
+          }
+        }
+      } catch (error) {
+        console.error('Error in periodic limit check:', error);
+      }
+    }
+  }, 60000); // Check every minute
+  
+  debugLog('Periodic limit checking setup complete');
+}
+
+
 
 // Replace the existing initializeValidation function with this version
+/**
+ * Initializes the validation system for order limits
+ */
 async function initializeValidation() {
   // Set global flag to indicate validation is not complete
   validationComplete = false;
   
-  const productId = getProductId();
-  if (!productId) {
-    debugLog('Not on a product page or could not determine product ID');
-    // Re-enable any initially disabled buttons
-    document.querySelectorAll('[data-limit-preemptive-disabled="true"]').forEach(button => {
-      button.disabled = false;
-      button.style.opacity = '';
-      button.style.pointerEvents = '';
-      
-      // Restore original button text if available
-      if (button.tagName === 'BUTTON' || button.tagName === 'A' || button.tagName === 'SPAN') {
-        const originalText = button.getAttribute('data-original-text');
-        if (originalText) {
-          button.innerText = originalText;
-        }
-      } else if (button.tagName === 'INPUT') {
-        const originalValue = button.getAttribute('data-original-value');
-        if (originalValue) {
-          button.value = originalValue;
-        }
-      }
-      
-      button.removeAttribute('data-limit-preemptive-disabled');
-      button.removeAttribute('data-original-text');
-      button.removeAttribute('data-original-value');
-    });
-    validationComplete = true;
-    return;
-  }
-
-  // Start by immediately disabling all checkout buttons with "Verifying..." text
+  // Immediately disable all checkout buttons with "Verifying..." text
   const buttons = immediatelyDisableCheckoutButtons();
   buttons.forEach(button => {
     button.classList.add('limit-initial-disabled');
@@ -1733,61 +2446,57 @@ async function initializeValidation() {
   
   debugLog(`Initially disabled ${buttons.length} checkout buttons with "Verifying..." text while validating`);
   
-  // Get previously saved state
-  const savedState = getValidationState();
-  if (savedState && savedState.productId === productId) {
-    debugLog('Using saved validation state:', savedState);
-    // If we have saved state indicating invalid, directly show the message
-    if (!savedState.isValid && savedState.message) {
-      showLimitWarning(savedState.message);
-    }
-  }
-
   try {
-    // Start both operations in parallel - this is key for optimization
-    const cartPromise = checkCurrentCart();
-    const limitsPromise = fetchOrderLimits(productId);
+    // Start with a cart check to get current contents
+    await checkCurrentCart();
     
-    // Add a timeout to ensure we don't wait forever
-    const timeoutPromise = new Promise((resolve, reject) => {
-      setTimeout(() => {
-        reject(new Error('Validation timed out after 5 seconds'));
-      }, 5000);
-    });
-    
-    // Wait for both operations or timeout, whichever comes first
-    const [_, limits] = await Promise.race([
-      Promise.all([cartPromise, limitsPromise]),
-      timeoutPromise.then(() => {
-        // If we timeout but have saved state, use that
-        if (savedState && savedState.productId === productId) {
-          debugLog('Validation timed out, using saved state');
-          return [currentCartQuantity || 0, { 
-            minLimit: 1, 
-            maxLimit: savedState.isValid ? 999 : 0, // Force invalid if saved state was invalid
-            productId: productId,
-            source: 'saved-state-timeout-fallback'
-          }];
+    // If we're on a product page, track the current product ID
+    const currentProductId = getProductId();
+    if (currentProductId) {
+      debugLog(`On product page for ${currentProductId}`);
+      // Only fetch this individual product's limits if we're on its page
+      try {
+        const productLimit = await fetchOrderLimits(currentProductId);
+        if (productLimit) {
+          // Store in our map format
+          productLimitsMap[currentProductId] = productLimit;
         }
-        throw new Error('Validation timed out');
-      })
-    ]);
-    
-    productLimits = limits;
-    
-    if (!limits) {
-      debugLog('No limits could be retrieved, allowing checkout to proceed');
-      // Enable checkout buttons if no limits are defined
-      const buttons = document.querySelectorAll('[data-limit-preemptive-disabled="true"]');
-      enableCheckoutButtons(buttons);
-      validationComplete = true;
-      return;
+      } catch (error) {
+        console.error(`Error fetching limits for current product ${currentProductId}:`, error);
+      }
+    } else {
+      debugLog('Not on a product page - will check all cart products');
     }
     
-    debugLog('Limits retrieved:', limits, 'Current cart quantity:', currentCartQuantity);
+    // Always fetch limits for all products in cart
+    debugLog('Fetching limits for all products in cart');
+    const allLimits = await fetchAllProductLimits();
+
+    // Store previous limits count for comparison
+    const prevLimitCount = Object.keys(productLimitsMap).length;
+
+    // Merge any new limits into our map
+    productLimitsMap = { ...productLimitsMap, ...allLimits };
+
+    // Log detailed info about the limits we found
+    const newLimitCount = Object.keys(productLimitsMap).length;
+    debugLog(`Combined product limits: ${prevLimitCount} previous + ${Object.keys(allLimits).length} new = ${newLimitCount} total`);
+
+    // Log each product limit for debugging
+    if (newLimitCount > 0) {
+      Object.entries(productLimitsMap).forEach(([productId, limit]) => {
+        debugLog(`Product ${productId} limits: min=${limit.minLimit}, max=${limit.maxLimit}`);
+      });
+    }
     
-    // Now update checkout buttons state based on actual data
-    await updateCheckoutButtonsState();
+    // Validate all products against their limits
+    const validationResult = validateAllProducts();
+    
+    // Store the validation result
+    lastValidationResult = validationResult;
+    
+    // Update checkout buttons state based on validation
+    updateCheckoutButtonsState(validationResult);
   
     // Set up additional observers for cart updates and dynamic checkout buttons
     setupCartUpdateObserver();
@@ -1800,20 +2509,25 @@ async function initializeValidation() {
     const onCartPage = window.location.pathname.includes('/cart');
     if (onCartPage) {
       setupCartPageInterception();
+      highlightCartItemsWithLimits();
     }
   
-    debugLog('Order limit validation fully initialized for product', productId);
+    debugLog('Order limit validation fully initialized');
   } catch (error) {
     console.error('Error during validation initialization:', error);
     // In case of error, restore buttons to original state to avoid broken UX
     const buttons = document.querySelectorAll('[data-limit-preemptive-disabled="true"]');
     enableCheckoutButtons(buttons);
+  } finally {
     validationComplete = true;
   }
 
+  // Set up safety checks to ensure checkout buttons stay in correct state
   setupSafetyChecks();
-}
 
+  // Call this at the end of initializeValidation
+  setupPeriodicLimitCheck();  
+}
 
   // ADD this new function
   function setupCartUpdateObserver() {
@@ -1862,10 +2576,19 @@ async function initializeValidation() {
         // Immediately disable checkout buttons
         immediatelyDisableCheckoutButtons();
         
-        // Then schedule a validation after a short delay
-        setTimeout(() => {
-          checkCurrentCart().then(() => updateCheckoutButtonsState());
-        }, 150); // Slightly longer delay to ensure DOM is fully updated
+        // Then refresh limits and validate
+        setTimeout(async () => {
+          await checkCurrentCart();
+          // Fetch new limits for all cart products
+          const newLimits = await fetchAllProductLimits();
+          // Update our limits map
+          productLimitsMap = { ...productLimitsMap, ...newLimits };
+          // Validate and update checkout state
+          const validationResult = validateAllProducts();
+          updateCheckoutButtonsState(validationResult);
+          // Highlight limited items
+          highlightCartItemsWithLimits();
+        }, 150);
       }
     });
   

@@ -1,0 +1,1 @@
+(record.shop.id == $session.shop.id) || ($session.roles.includes("system-admin"))
